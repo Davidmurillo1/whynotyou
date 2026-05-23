@@ -1,26 +1,39 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+@theme {
+  --color-bg: #0e1116;
+  --color-surface: #171b22;
+  --color-surface-2: #1f2530;
+  --color-border: #2a313d;
+  --color-text: #e8eaed;
+  --color-muted: #8b93a1;
+  --color-accent: #7c9cff;
+  --color-success: #5bd6a4;
+  --color-streak: #f5a65b;
+  --color-danger: #e36f6f;
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  --font-serif: ui-serif, Georgia, "Source Serif Pro", serif;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  background: var(--color-bg);
+  color: var(--color-text);
+  color-scheme: dark;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans), system-ui, sans-serif;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+}
+
+*::selection {
+  background: color-mix(in oklab, var(--color-accent) 30%, transparent);
+  color: var(--color-text);
+}
+
+/* tnum para todos los numerales en stats y timers */
+.tabular {
+  font-variant-numeric: tabular-nums;
 }
