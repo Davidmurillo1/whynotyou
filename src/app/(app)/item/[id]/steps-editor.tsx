@@ -8,7 +8,13 @@ import {
   reorderStepsAction,
   deleteStepAction,
 } from '@/lib/actions/steps'
-import { computeStepProgress, isStepEffectivelyDone, type ProgressMode } from '@/lib/items/progress'
+import { normalizeStepsWeightsAction } from '@/lib/actions/item-weight-mode'
+import {
+  computeStepProgress,
+  isStepEffectivelyDone,
+  type ProgressMode,
+  type StepsWeightMode,
+} from '@/lib/items/progress'
 
 export type Step = {
   id: string
@@ -19,6 +25,11 @@ export type Step = {
   parent_step_id: string | null
   progress_mode: ProgressMode
 }
+
+/** Tolerancia para considerar la suma "= 100" frente a errores de redondeo
+ *  acumulados (e.g. 33.33 + 33.33 + 33.34 = 100.00 exacto, pero
+ *  33.3 + 33.3 + 33.4 = 100.0 también). */
+const SUM_EPSILON = 0.01
 
 const inputCls =
   'rounded-lg border border-border bg-surface px-3 py-2 text-sm text-text placeholder:text-muted/60 focus:border-accent focus:outline-none'
@@ -36,10 +47,14 @@ export function StepsEditor({
   itemId,
   steps,
   setSteps,
+  weightMode,
+  onWeightModeChange,
 }: {
   itemId: string
   steps: Step[]
   setSteps: React.Dispatch<React.SetStateAction<Step[]>>
+  weightMode: StepsWeightMode
+  onWeightModeChange: (mode: StepsWeightMode) => void
 }) {
   const [pending, startTransition] = useTransition()
   const [error, setError] = useState<string | null>(null)
@@ -49,13 +64,46 @@ export function StepsEditor({
     steps.filter((s) => s.parent_step_id === rootId).sort((a, b) => a.position - b.position)
 
   const rootsDone = roots.filter((r) => isStepEffectivelyDone(r, steps)).length
-  const totalRootWeight = roots.reduce((acc, r) => acc + r.weight_pct, 0)
-  const accumulatedWeight = roots.reduce(
-    (acc, r) => acc + r.weight_pct * computeStepProgress(r, steps),
-    0,
-  )
-  const progressPct =
-    totalRootWeight > 0 ? Math.round((accumulatedWeight / totalRootWeight) * 100) : 0
+
+  // Subtítulo del editor. En 'equal' ignoramos los pesos: cada módulo aporta 1/n.
+  // En 'custom' usamos la suma ponderada como hasta ahora.
+  let progressPct = 0
+  let totalRootWeight = 0
+  if (roots.length > 0) {
+    if (weightMode === 'equal') {
+      const sum = roots.reduce((acc, r) => acc + computeStepProgress(r, steps), 0)
+      progressPct = Math.round((sum / roots.length) * 100)
+    } else {
+      totalRootWeight = roots.reduce((acc, r) => acc + r.weight_pct, 0)
+      const accumulatedWeight = roots.reduce(
+        (acc, r) => acc + r.weight_pct * computeStepProgress(r, steps),
+        0,
+      )
+      progressPct =
+        totalRootWeight > 0 ? Math.round((accumulatedWeight / totalRootWeight) * 100) : 0
+    }
+  }
+
+  // En 'custom', cuánto suman los pesos en este momento. Es solo señal visual.
+  const customSum = roots.reduce((acc, r) => acc + r.weight_pct, 0)
+  const sumIsCorrect = Math.abs(customSum - 100) < SUM_EPSILON
+  const showCustomSumBanner = weightMode === 'custom' && roots.length > 0 && !sumIsCorrect
+
+  const handleNormalize = () => {
+    setError(null)
+    startTransition(async () => {
+      const result = await normalizeStepsWeightsAction({ item_id: itemId })
+      if ('error' in result) {
+        setError(result.error)
+        return
+      }
+      // Aplicar los nuevos pesos al state local.
+      const byId = new Map(result.weights.map((w) => [w.id, w.weight_pct]))
+      setSteps((prev) =>
+        prev.map((s) => (byId.has(s.id) ? { ...s, weight_pct: byId.get(s.id)! } : s)),
+      )
+    })
+  }
 
   const handleToggle = (step: Step) => {
     const hasChildren = steps.some((s) => s.parent_step_id === step.id)
@@ -169,9 +217,37 @@ export function StepsEditor({
   return (
     <div className="space-y-4">
       {roots.length > 0 && (
-        <p className="text-xs text-muted">
-          {rootsDone} de {roots.length} módulos completados · {progressPct}% del peso total
-        </p>
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <p className="text-xs text-muted">
+            {rootsDone} de {roots.length} módulos completados · {progressPct}%
+            {weightMode === 'custom' && <> del peso total</>}
+          </p>
+          <WeightModeToggle
+            mode={weightMode}
+            onChange={onWeightModeChange}
+            disabled={pending}
+          />
+        </div>
+      )}
+
+      {showCustomSumBanner && (
+        <div
+          className="flex items-center justify-between gap-3 flex-wrap rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs"
+          role="status"
+        >
+          <span className="text-amber-200">
+            Tus pesos suman {formatWeight(customSum)} (debería ser 100). El progreso se calcula
+            proporcional.
+          </span>
+          <button
+            type="button"
+            onClick={handleNormalize}
+            disabled={pending}
+            className="rounded-md border border-amber-500/40 px-2 py-1 text-amber-200 hover:bg-amber-500/15 disabled:opacity-50"
+          >
+            Normalizar a 100
+          </button>
+        </div>
       )}
 
       {roots.length === 0 && (
@@ -181,6 +257,7 @@ export function StepsEditor({
           pending={pending}
           setError={setError}
           onCreated={(created) => setSteps((prev) => [...prev, created])}
+          weightMode={weightMode}
           firstOne
         />
       )}
@@ -196,6 +273,7 @@ export function StepsEditor({
               isFirst={idx === 0}
               isLast={idx === roots.length - 1}
               pending={pending}
+              weightMode={weightMode}
               onToggle={handleToggle}
               onDelete={handleDelete}
               onMove={handleMoveRoot}
@@ -211,6 +289,15 @@ export function StepsEditor({
         </ul>
       )}
 
+      {roots.length > 0 && weightMode === 'custom' && (
+        <p
+          className={`text-xs tabular ${sumIsCorrect ? 'text-muted' : 'text-amber-300'}`}
+          aria-live="polite"
+        >
+          Suma actual: {formatWeight(customSum)} / 100
+        </p>
+      )}
+
       {roots.length > 0 && (
         <NewStepForm
           itemId={itemId}
@@ -218,6 +305,7 @@ export function StepsEditor({
           pending={pending}
           setError={setError}
           onCreated={(created) => setSteps((prev) => [...prev, created])}
+          weightMode={weightMode}
         />
       )}
 
@@ -230,6 +318,12 @@ export function StepsEditor({
   )
 }
 
+/** Redondea a 2 decimales sin mostrar `.00` cuando no hace falta. */
+function formatWeight(n: number): string {
+  const rounded = Math.round(n * 100) / 100
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2).replace(/0$/, '')
+}
+
 function ModuleRow({
   module,
   tasks,
@@ -237,6 +331,7 @@ function ModuleRow({
   isFirst,
   isLast,
   pending,
+  weightMode,
   onToggle,
   onDelete,
   onMove,
@@ -254,6 +349,7 @@ function ModuleRow({
   isFirst: boolean
   isLast: boolean
   pending: boolean
+  weightMode: StepsWeightMode
   onToggle: (s: Step) => void
   onDelete: (s: Step) => void
   onMove: (s: Step, dir: -1 | 1) => void
@@ -291,19 +387,26 @@ function ModuleRow({
             onBlur={(e) => onRename(module, e.target.value)}
             className={`${inputCls} flex-1 min-w-0 ${effectivelyDone ? 'line-through text-muted' : ''}`}
           />
-          <div className="flex items-center gap-1 shrink-0">
-            <input
-              type="number"
-              min={0.01}
-              max={100}
-              step="any"
-              defaultValue={module.weight_pct}
-              onBlur={(e) => onWeight(module, Number(e.target.value))}
-              className={`${inputCls} w-20 text-right tabular`}
-              aria-label="Peso porcentual del módulo"
-            />
-            <span className="text-xs text-muted">%</span>
-          </div>
+          {weightMode === 'custom' && (
+            <div className="flex items-center gap-1 shrink-0">
+              <input
+                // `key` fuerza remontar el input cuando el peso cambia desde
+                // fuera (ej. tras "Normalizar a 100"). Sin esto, defaultValue
+                // solo se aplica al primer render y la UI queda desactualizada
+                // hasta refrescar la página.
+                key={module.weight_pct}
+                type="number"
+                min={0.01}
+                max={100}
+                step="any"
+                defaultValue={module.weight_pct}
+                onBlur={(e) => onWeight(module, Number(e.target.value))}
+                className={`${inputCls} w-20 text-right tabular`}
+                aria-label="Peso porcentual del módulo"
+              />
+              <span className="text-xs text-muted">%</span>
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-1 shrink-0">
           <button
@@ -444,6 +547,7 @@ function NewStepForm({
   pending,
   setError,
   onCreated,
+  weightMode,
   firstOne,
 }: {
   itemId: string
@@ -451,6 +555,7 @@ function NewStepForm({
   pending: boolean
   setError: (e: string | null) => void
   onCreated: (created: Step) => void
+  weightMode: StepsWeightMode
   firstOne?: boolean
 }) {
   const [open, setOpen] = useState(firstOne ?? false)
@@ -464,11 +569,21 @@ function NewStepForm({
 
   const handleCreate = () => {
     setError(null)
-    const weightNum = Number(weight)
     if (!name.trim()) return setError('Poné un nombre al módulo.')
-    if (!Number.isFinite(weightNum) || weightNum <= 0 || weightNum > 100) {
-      return setError('El peso tiene que ser mayor que 0 y hasta 100.')
+
+    // En 'equal' el peso no se muestra: se envía 1 como placeholder. Se preserva
+    // en DB por si el usuario después cambia a 'custom' (ahí lo va a editar).
+    // En 'custom' validamos lo que tipeó.
+    let weightNum: number
+    if (weightMode === 'equal') {
+      weightNum = 1
+    } else {
+      weightNum = Number(weight)
+      if (!Number.isFinite(weightNum) || weightNum <= 0 || weightNum > 100) {
+        return setError('El peso tiene que ser mayor que 0 y hasta 100.')
+      }
     }
+
     startTransition(async () => {
       const result = await createStepAction({
         item_id: itemId,
@@ -509,19 +624,21 @@ function NewStepForm({
           maxLength={120}
           className={`${inputCls} flex-1`}
         />
-        <div className="flex items-center gap-1">
-          <input
-            type="number"
-            min={0.01}
-            max={100}
-            step="any"
-            placeholder="%"
-            value={weight}
-            onChange={(e) => setWeight(e.target.value)}
-            className={`${inputCls} w-20 text-right tabular`}
-          />
-          <span className="text-xs text-muted">%</span>
-        </div>
+        {weightMode === 'custom' && (
+          <div className="flex items-center gap-1">
+            <input
+              type="number"
+              min={0.01}
+              max={100}
+              step="any"
+              placeholder="%"
+              value={weight}
+              onChange={(e) => setWeight(e.target.value)}
+              className={`${inputCls} w-20 text-right tabular`}
+            />
+            <span className="text-xs text-muted">%</span>
+          </div>
+        )}
       </div>
       <div className="flex items-center gap-2">
         <button
@@ -674,6 +791,50 @@ function ProgressModeToggle({
             }`}
           >
             {label}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+/** Toggle para alternar entre reparto "Igualitario" y "Personalizado" del peso
+ *  entre los módulos del ítem. Persistido a nivel ítem (no a nivel paso). */
+function WeightModeToggle({
+  mode,
+  onChange,
+  disabled,
+}: {
+  mode: StepsWeightMode
+  onChange: (m: StepsWeightMode) => void
+  disabled?: boolean
+}) {
+  const options: { value: StepsWeightMode; label: string }[] = [
+    { value: 'equal', label: 'Igualitario' },
+    { value: 'custom', label: 'Personalizado' },
+  ]
+  return (
+    <div
+      className="inline-flex items-center gap-0.5 rounded-md border border-border bg-surface p-0.5 text-[11px]"
+      role="radiogroup"
+      aria-label="Reparto de peso entre módulos"
+    >
+      <span className="px-1.5 text-muted">Peso:</span>
+      {options.map((o) => {
+        const active = mode === o.value
+        return (
+          <button
+            key={o.value}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            disabled={disabled}
+            onClick={() => onChange(o.value)}
+            className={`rounded-sm px-2 py-0.5 font-medium transition-colors disabled:opacity-50 ${
+              active ? 'bg-accent/15 text-accent' : 'text-muted hover:text-text'
+            }`}
+          >
+            {o.label}
           </button>
         )
       })}

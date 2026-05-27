@@ -9,14 +9,18 @@
  *     - `'weighted'` (default): `sum(child.weight WHERE done) / sum(child.weight)`
  *     - `'count'`: `done_children / total_children` (todas las tareas valen igual)
  *   El campo `is_done` del módulo se ignora (estado derivado).
- * - **Ítem**: el progreso es la suma ponderada de cada paso raíz por su peso:
- *   `sum(root.weight * progress(root)) / sum(root.weight)`.
+ * - **Ítem**: el progreso entre módulos depende del `steps_weight_mode` del ítem:
+ *     - `'equal'` (default para ítems nuevos): cada módulo aporta `1/n` —
+ *       `weight_pct` se ignora.
+ *     - `'custom'`: suma ponderada de cada paso raíz por su peso, igual que la
+ *       lógica anterior — `sum(root.weight * progress(root)) / sum(root.weight)`.
  *
  * Si el ítem no tiene pasos, se cae al modelo de unidades:
  * `current_units / total_units`.
  */
 
 export type ProgressMode = 'weighted' | 'count'
+export type StepsWeightMode = 'equal' | 'custom'
 
 export type StepLike = {
   id: string
@@ -29,6 +33,7 @@ export type StepLike = {
 export type ItemProgressInput = {
   current_units: number | string
   total_units: number | string
+  steps_weight_mode?: StepsWeightMode | null
 }
 
 /** Fracción 0..1 del progreso de un paso individual, considerando sus hijos. */
@@ -62,6 +67,18 @@ export function computeItemProgress(item: ItemProgressInput, steps?: StepLike[] 
   if (steps && steps.length > 0) {
     const roots = steps.filter((s) => !s.parent_step_id)
     if (roots.length === 0) return 0
+
+    // Default a 'equal' cuando no llega: es el comportamiento más predecible.
+    // Los ítems pre-cambio quedan en 'custom' por la migración.
+    const mode: StepsWeightMode = item.steps_weight_mode ?? 'equal'
+
+    if (mode === 'equal') {
+      // Cada módulo aporta 1/n, ignorando weight_pct.
+      const sum = roots.reduce((acc, root) => acc + computeStepProgress(root, steps), 0)
+      return clamp01(sum / roots.length)
+    }
+
+    // mode === 'custom' — lógica histórica de pesos relativos.
     const totalWeight = roots.reduce((acc, s) => acc + Number(s.weight_pct), 0)
     if (totalWeight <= 0) return 0
     const accum = roots.reduce((acc, root) => {

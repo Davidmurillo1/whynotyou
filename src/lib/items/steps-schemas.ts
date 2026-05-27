@@ -7,6 +7,29 @@ import { z } from 'zod'
 export const progressModeEnum = z.enum(['weighted', 'count'])
 export type ProgressMode = z.infer<typeof progressModeEnum>
 
+/** Modo de reparto del peso entre módulos (pasos raíz) de un ítem:
+ *  - 'equal': todos los módulos pesan lo mismo. `weight_pct` se ignora.
+ *  - 'custom': cada módulo aporta según su `weight_pct`. La suma no
+ *    está obligada a cerrar 100 — el sistema acepta estados intermedios
+ *    y solo lo indica visualmente.
+ *  Default para ítems nuevos: 'equal'. Default para ítems pre-cambio
+ *  con pasos: 'custom' (set por migración). Ver design.md, Decisión 2. */
+export const stepsWeightModeEnum = z.enum(['equal', 'custom'])
+export type StepsWeightMode = z.infer<typeof stepsWeightModeEnum>
+
+/** Cambio del modo de reparto de peso a nivel ítem. */
+export const setStepsWeightModeSchema = z.object({
+  item_id: z.string().uuid(),
+  mode: stepsWeightModeEnum,
+})
+export type SetStepsWeightModeInput = z.infer<typeof setStepsWeightModeSchema>
+
+/** Reescalado proporcional a 100 de los pesos de los módulos del ítem. */
+export const normalizeStepsWeightsSchema = z.object({
+  item_id: z.string().uuid(),
+})
+export type NormalizeStepsWeightsInput = z.infer<typeof normalizeStepsWeightsSchema>
+
 /** Esquema para crear un paso nuevo. `position` es 0-based y el caller decide
  *  cuál corresponde (la action puede ponerlo al final si no llega).
  *  Si `parent_step_id` llega, el paso es una tarea hija de ese módulo.

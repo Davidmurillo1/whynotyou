@@ -155,7 +155,7 @@ Solo agregá `"use client"` cuando hace falta estado, efectos o handlers del bro
 Tablas principales (inferidas del código — confirmá en Supabase antes de cambios de schema):
 
 - `profiles`: `id` (= auth.users.id), `username`, `timezone`, configuración de recordatorios.
-- `items`: `id`, `user_id`, `title`, `kind` (book | video_course | long_program | docs | article_series | podcast), `unit_type` (pages | videos | modules | chapters | hours | percent), `total_units`, `source_url`, `category_id`, `status` (active | paused | done | abandoned).
+- `items`: `id`, `user_id`, `title`, `kind` (book | video_course | long_program | docs | article_series | podcast), `unit_type` (pages | videos | modules | chapters | hours | percent), `total_units`, `source_url`, `category_id`, `status` (active | paused | done | abandoned), `scope` (study | work), `steps_weight_mode` (equal | custom — solo aplica si el ítem tiene pasos; ver `openspec/specs/item-steps/spec.md`).
 - `sessions`: `id`, `user_id`, `item_id`, `started_at`, `duration_seconds`, `units_progressed`, `note`.
 - `categories`: `id`, `user_id`, `name`, color.
 

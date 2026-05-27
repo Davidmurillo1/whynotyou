@@ -4,7 +4,12 @@ import { ProgressRing } from '@/components/progress-ring'
 import { EmptyState } from '@/components/empty-state'
 import { getGreeting } from '@/lib/greetings'
 import { unitLabel, type ItemScope } from '@/lib/items/constants'
-import { computeItemProgress, stepsSummary, type StepLike } from '@/lib/items/progress'
+import {
+  computeItemProgress,
+  stepsSummary,
+  type StepLike,
+  type StepsWeightMode,
+} from '@/lib/items/progress'
 
 export const metadata = { title: 'Hoy · Why Not You?' }
 export const dynamic = 'force-dynamic'
@@ -19,6 +24,7 @@ type Item = {
   status: string
   updated_at: string
   scope: ItemScope
+  steps_weight_mode: StepsWeightMode
 }
 
 type StepRow = StepLike & { item_id: string; id: string }
@@ -39,7 +45,9 @@ export default async function DashboardPage() {
         .single(),
       supabase
         .from('items')
-        .select('id, title, kind, unit_type, total_units, current_units, status, scope, updated_at')
+        .select(
+          'id, title, kind, unit_type, total_units, current_units, status, scope, steps_weight_mode, updated_at',
+        )
         .eq('user_id', user!.id)
         .eq('status', 'active')
         .order('updated_at', { ascending: false }),

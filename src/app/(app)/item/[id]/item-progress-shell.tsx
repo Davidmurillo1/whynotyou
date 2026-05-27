@@ -1,12 +1,17 @@
 'use client'
 
-import { useState, type ReactNode } from 'react'
+import { useState, useTransition, type ReactNode } from 'react'
 import Link from 'next/link'
 import { ProgressRing } from '@/components/progress-ring'
 import { CategoryBadge } from '@/components/category-badge'
 import { kindLabel, unitLabel } from '@/lib/items/constants'
-import { computeItemProgress, stepsSummary } from '@/lib/items/progress'
+import {
+  computeItemProgress,
+  stepsSummary,
+  type StepsWeightMode,
+} from '@/lib/items/progress'
 import { formatRelative } from '@/lib/format'
+import { setStepsWeightModeAction } from '@/lib/actions/item-weight-mode'
 import { StepsEditor, type Step } from './steps-editor'
 
 type ItemForShell = {
@@ -19,6 +24,7 @@ type ItemForShell = {
   status: string
   source_url: string | null
   completed_at: string | null
+  steps_weight_mode: StepsWeightMode
 }
 
 type CategoryForShell = {
@@ -50,8 +56,25 @@ export function ItemProgressShell({
   const [steps, setSteps] = useState<Step[]>(
     [...initialSteps].sort((a, b) => a.position - b.position),
   )
+  const [weightMode, setWeightMode] = useState<StepsWeightMode>(item.steps_weight_mode)
+  const [, startWeightModeTransition] = useTransition()
+  const [weightModeError, setWeightModeError] = useState<string | null>(null)
 
-  const pct = computeItemProgress(item, steps)
+  const handleWeightModeChange = (next: StepsWeightMode) => {
+    if (next === weightMode) return
+    const prev = weightMode
+    setWeightMode(next)
+    setWeightModeError(null)
+    startWeightModeTransition(async () => {
+      const result = await setStepsWeightModeAction({ item_id: item.id, mode: next })
+      if ('error' in result) {
+        setWeightModeError(result.error)
+        setWeightMode(prev)
+      }
+    })
+  }
+
+  const pct = computeItemProgress({ ...item, steps_weight_mode: weightMode }, steps)
   const summary = stepsSummary(steps)
   const isDone = item.status === 'done'
 
@@ -124,7 +147,18 @@ export function ItemProgressShell({
         <h2 className="text-xs uppercase tracking-wider text-muted">
           Pasos {steps.length > 0 && `· ${summary.done}/${summary.total}`}
         </h2>
-        <StepsEditor itemId={item.id} steps={steps} setSteps={setSteps} />
+        <StepsEditor
+          itemId={item.id}
+          steps={steps}
+          setSteps={setSteps}
+          weightMode={weightMode}
+          onWeightModeChange={handleWeightModeChange}
+        />
+        {weightModeError && (
+          <p className="text-sm text-danger" role="alert">
+            {weightModeError}
+          </p>
+        )}
       </section>
     </>
   )

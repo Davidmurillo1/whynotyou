@@ -31,7 +31,9 @@ export default async function ItemDetailPage({
   const [{ data: item }, { data: sessions }, { data: cats }, { data: stepsRaw }] = await Promise.all([
     supabase
       .from('items')
-      .select('id, title, kind, unit_type, total_units, current_units, status, source_url, started_at, completed_at, category_id, scope')
+      .select(
+        'id, title, kind, unit_type, total_units, current_units, status, source_url, started_at, completed_at, category_id, scope, steps_weight_mode',
+      )
       .eq('id', id)
       .eq('user_id', user!.id)
       .maybeSingle(),
@@ -100,6 +102,8 @@ export default async function ItemDetailPage({
           status: item.status,
           source_url: item.source_url ?? null,
           completed_at: item.completed_at ?? null,
+          steps_weight_mode:
+            (item.steps_weight_mode as 'equal' | 'custom' | null) ?? 'equal',
         }}
         category={
           currentCat
