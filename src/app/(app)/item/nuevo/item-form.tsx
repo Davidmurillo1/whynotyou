@@ -1,9 +1,9 @@
 'use client'
 
 import Link from 'next/link'
-import { useActionState } from 'react'
+import { useActionState, useState } from 'react'
 import { createItemAction, type ItemActionState } from '@/lib/actions/items'
-import { ITEM_KIND_OPTIONS, UNIT_TYPE_OPTIONS } from '@/lib/items/constants'
+import { ITEM_KIND_OPTIONS, UNIT_TYPE_OPTIONS, ITEM_SCOPE_OPTIONS, type ItemScope } from '@/lib/items/constants'
 
 const inputCls =
   'w-full rounded-lg border border-border bg-surface px-3 py-2.5 text-text placeholder:text-muted/60 focus:border-accent focus:outline-none'
@@ -12,9 +12,37 @@ type CategoryOption = { id: string; label: string }
 
 export function ItemForm({ categoryOptions }: { categoryOptions: CategoryOption[] }) {
   const [state, action, pending] = useActionState<ItemActionState, FormData>(createItemAction, null)
+  const [scope, setScope] = useState<ItemScope>('study')
 
   return (
     <form action={action} className="space-y-5">
+      <input type="hidden" name="scope" value={scope} />
+
+      <div className="space-y-1.5">
+        <span className="block text-sm text-muted">Esto es para…</span>
+        <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Tipo de proyecto">
+          {ITEM_SCOPE_OPTIONS.map((opt) => {
+            const active = scope === opt.value
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                onClick={() => setScope(opt.value)}
+                className={`rounded-lg border px-3 py-2.5 text-sm font-medium transition-colors ${
+                  active
+                    ? 'border-accent bg-accent/10 text-accent'
+                    : 'border-border bg-surface text-muted hover:text-text'
+                }`}
+              >
+                {opt.label}
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
       <div className="space-y-1.5">
         <label htmlFor="title" className="block text-sm text-muted">Título</label>
         <input

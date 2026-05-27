@@ -23,9 +23,15 @@ export const ITEM_STATUS_OPTIONS = [
   { value: 'abandoned', label: 'Abandonado' },
 ] as const
 
+export const ITEM_SCOPE_OPTIONS = [
+  { value: 'study', label: 'Estudio' },
+  { value: 'work', label: 'Trabajo' },
+] as const
+
 export type ItemKind = (typeof ITEM_KIND_OPTIONS)[number]['value']
 export type UnitType = (typeof UNIT_TYPE_OPTIONS)[number]['value']
 export type ItemStatus = (typeof ITEM_STATUS_OPTIONS)[number]['value']
+export type ItemScope = (typeof ITEM_SCOPE_OPTIONS)[number]['value']
 
 export function kindLabel(kind: ItemKind | string) {
   return ITEM_KIND_OPTIONS.find((k) => k.value === kind)?.label ?? kind
@@ -37,4 +43,7 @@ export function unitLabel(unit: UnitType | string, count: number = 2) {
 }
 export function statusLabel(status: ItemStatus | string) {
   return ITEM_STATUS_OPTIONS.find((s) => s.value === status)?.label ?? status
+}
+export function scopeLabel(scope: ItemScope | string) {
+  return ITEM_SCOPE_OPTIONS.find((s) => s.value === scope)?.label ?? scope
 }

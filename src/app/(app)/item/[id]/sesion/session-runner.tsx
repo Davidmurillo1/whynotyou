@@ -8,6 +8,13 @@ import { formatTimer } from '@/lib/format'
 import { Confetti } from '@/components/confetti'
 import type { Highlight } from '@/lib/highlights'
 
+type StepOption = {
+  id: string
+  name: string
+  weight_pct: number
+  is_done: boolean
+}
+
 type Props = {
   itemId: string
   itemTitle: string
@@ -15,6 +22,7 @@ type Props = {
   unitLabelPlural: string
   currentUnits: number
   totalUnits: number
+  steps: StepOption[]
 }
 
 export function SessionRunner({
@@ -23,6 +31,7 @@ export function SessionRunner({
   unitLabelPlural,
   currentUnits,
   totalUnits,
+  steps,
 }: Props) {
   const router = useRouter()
   const [startedAt] = useState(() => new Date().toISOString())
@@ -35,11 +44,16 @@ export function SessionRunner({
   const [phase, setPhase] = useState<'running' | 'capture' | 'done'>('running')
   const [targetUnits, setTargetUnits] = useState<string>(String(currentUnits))
   const [note, setNote] = useState('')
+  const [selectedStepId, setSelectedStepId] = useState<string>('')
+  const [completeStep, setCompleteStep] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [celebrationTier, setCelebrationTier] = useState<'small' | 'medium' | 'large' | null>(null)
   const [highlight, setHighlight] = useState<Highlight | null>(null)
   const [itemCompleted, setItemCompleted] = useState(false)
+
+  const hasSteps = steps.length > 0
+  const pendingSteps = steps.filter((s) => !s.is_done)
 
   useEffect(() => {
     if (phase !== 'running') return
@@ -90,13 +104,15 @@ export function SessionRunner({
       duration_seconds: Math.max(0, Math.min(86400, elapsed)),
       units_progressed: delta,
       note: note.trim() || undefined,
+      step_id: selectedStepId || undefined,
+      complete_step: selectedStepId ? completeStep : undefined,
     })
     if ('error' in result) {
       setError(result.error)
       setSubmitting(false)
       return
     }
-    setCelebrationTier(result.itemCompleted ? 'large' : delta > 0 ? 'medium' : 'small')
+    setCelebrationTier(result.itemCompleted ? 'large' : delta > 0 || completeStep ? 'medium' : 'small')
     setHighlight(result.highlight)
     setItemCompleted(result.itemCompleted)
     setPhase('done')
@@ -152,24 +168,76 @@ export function SessionRunner({
           <p className="text-sm text-muted tabular">{formatTimer(elapsed)}</p>
         </header>
 
-        <div className="space-y-1.5">
-          <label htmlFor="reached" className="block text-sm text-muted">
-            Avancé hasta ({unitLabelPlural})
-          </label>
-          <input
-            id="reached"
-            type="number"
-            min={currentUnits}
-            max={totalUnits}
-            step="any"
-            value={targetUnits}
-            onChange={(e) => setTargetUnits(e.target.value)}
-            className="w-full rounded-lg border border-border bg-surface px-3 py-2.5 focus:border-accent focus:outline-none tabular"
-          />
-          <p className="text-xs text-muted">
-            Estabas en {currentUnits} de {totalUnits}.
-          </p>
-        </div>
+        {hasSteps && (
+          <div className="space-y-1.5">
+            <label htmlFor="step" className="block text-sm text-muted">
+              ¿En qué paso trabajaste?
+            </label>
+            <select
+              id="step"
+              value={selectedStepId}
+              onChange={(e) => {
+                setSelectedStepId(e.target.value)
+                setCompleteStep(false)
+              }}
+              className="w-full rounded-lg border border-border bg-surface px-3 py-2.5 focus:border-accent focus:outline-none"
+            >
+              <option value="">— Sin paso —</option>
+              {pendingSteps.length > 0 && (
+                <optgroup label="Pendientes">
+                  {pendingSteps.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} ({s.weight_pct}%)
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {steps.filter((s) => s.is_done).length > 0 && (
+                <optgroup label="Ya completados">
+                  {steps
+                    .filter((s) => s.is_done)
+                    .map((s) => (
+                      <option key={s.id} value={s.id}>
+                        ✓ {s.name} ({s.weight_pct}%)
+                      </option>
+                    ))}
+                </optgroup>
+              )}
+            </select>
+            {selectedStepId && (
+              <label className="flex items-center gap-2 text-sm text-text pt-1">
+                <input
+                  type="checkbox"
+                  checked={completeStep}
+                  onChange={(e) => setCompleteStep(e.target.checked)}
+                  className="w-4 h-4 accent-accent"
+                />
+                Marcar paso como completado
+              </label>
+            )}
+          </div>
+        )}
+
+        {!hasSteps && (
+          <div className="space-y-1.5">
+            <label htmlFor="reached" className="block text-sm text-muted">
+              Avancé hasta ({unitLabelPlural})
+            </label>
+            <input
+              id="reached"
+              type="number"
+              min={currentUnits}
+              max={totalUnits}
+              step="any"
+              value={targetUnits}
+              onChange={(e) => setTargetUnits(e.target.value)}
+              className="w-full rounded-lg border border-border bg-surface px-3 py-2.5 focus:border-accent focus:outline-none tabular"
+            />
+            <p className="text-xs text-muted">
+              Estabas en {currentUnits} de {totalUnits}.
+            </p>
+          </div>
+        )}
 
         <div className="space-y-1.5">
           <label htmlFor="note" className="block text-sm text-muted">

@@ -1,12 +1,19 @@
-import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { createSupabaseServerClient } from '@/lib/supabase/server'
-import { ProgressRing } from '@/components/progress-ring'
-import { CategoryBadge } from '@/components/category-badge'
-import { kindLabel, statusLabel, unitLabel } from '@/lib/items/constants'
+import {
+  statusLabel,
+  unitLabel,
+  type ItemKind,
+  type ItemScope,
+  type UnitType,
+} from '@/lib/items/constants'
 import { formatDuration, formatRelative } from '@/lib/format'
 import { ItemActions } from './item-actions'
 import { ItemCategoryEditor } from './item-category-editor'
+import { ItemScopeEditor } from './item-scope-editor'
+import { ItemDetailsEditor } from './item-details-editor'
+import { ItemProgressShell } from './item-progress-shell'
+import { type Step } from './steps-editor'
 
 export const dynamic = 'force-dynamic'
 
@@ -21,10 +28,10 @@ export default async function ItemDetailPage({
     data: { user },
   } = await supabase.auth.getUser()
 
-  const [{ data: item }, { data: sessions }, { data: cats }] = await Promise.all([
+  const [{ data: item }, { data: sessions }, { data: cats }, { data: stepsRaw }] = await Promise.all([
     supabase
       .from('items')
-      .select('id, title, kind, unit_type, total_units, current_units, status, source_url, started_at, completed_at, category_id')
+      .select('id, title, kind, unit_type, total_units, current_units, status, source_url, started_at, completed_at, category_id, scope')
       .eq('id', id)
       .eq('user_id', user!.id)
       .maybeSingle(),
@@ -39,13 +46,31 @@ export default async function ItemDetailPage({
       .select('id, name, color, emoji, parent_id')
       .eq('user_id', user!.id)
       .order('order_index', { ascending: true }),
+    supabase
+      .from('item_steps')
+      .select('id, name, weight_pct, position, is_done, parent_step_id, progress_mode')
+      .eq('item_id', id)
+      .eq('user_id', user!.id)
+      .order('position', { ascending: true }),
   ])
 
   if (!item) notFound()
 
-  const pct = Number(item.current_units) / Number(item.total_units)
-  const isDone = item.status === 'done'
+  // Normalizamos `steps` para el cliente: weight_pct viene como string desde
+  // Postgres numeric, convertimos a number una sola vez.
+  const steps: Step[] = (stepsRaw ?? []).map((s) => ({
+    id: s.id as string,
+    name: s.name as string,
+    weight_pct: Number(s.weight_pct),
+    position: Number(s.position),
+    is_done: Boolean(s.is_done),
+    parent_step_id: (s.parent_step_id as string | null) ?? null,
+    progress_mode: ((s.progress_mode as 'weighted' | 'count' | null) ?? 'weighted'),
+  }))
+
+  const hasSteps = steps.length > 0
   const currentCat = item.category_id ? (cats ?? []).find((c) => c.id === item.category_id) : null
+  const scope: ItemScope = (item.scope as ItemScope) ?? 'study'
 
   // Aplanar categorías con sangría
   const flatOptions = (() => {
@@ -64,58 +89,46 @@ export default async function ItemDetailPage({
 
   return (
     <div className="space-y-10">
-      <section className="space-y-5">
-        <Link href="/biblioteca" className="text-sm text-muted hover:text-text">
-          ← Biblioteca
-        </Link>
-        <div className="flex items-start gap-5">
-          <ProgressRing value={pct} size={88} stroke={8} />
-          <div className="flex-1">
-            <h1 className="text-2xl font-semibold tracking-tight leading-tight">{item.title}</h1>
-            <p className="text-sm text-muted mt-1">
-              {kindLabel(item.kind)} · {item.total_units} {unitLabel(item.unit_type, item.total_units)}
-            </p>
-            {currentCat && (
-              <div className="mt-2">
-                <Link href={`/categorias/${currentCat.id}`}>
-                  <CategoryBadge
-                    name={currentCat.name}
-                    color={currentCat.color}
-                    emoji={currentCat.emoji}
-                    size="sm"
-                  />
-                </Link>
-              </div>
-            )}
-            {item.source_url && (
-              <a
-                href={item.source_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-sm text-accent hover:underline inline-block mt-2 break-all"
-              >
-                {item.source_url}
-              </a>
-            )}
-          </div>
-        </div>
+      <ItemProgressShell
+        item={{
+          id: item.id,
+          title: item.title,
+          kind: item.kind,
+          unit_type: item.unit_type,
+          total_units: Number(item.total_units),
+          current_units: Number(item.current_units),
+          status: item.status,
+          source_url: item.source_url ?? null,
+          completed_at: item.completed_at ?? null,
+        }}
+        category={
+          currentCat
+            ? { id: currentCat.id, name: currentCat.name, color: currentCat.color, emoji: currentCat.emoji }
+            : null
+        }
+        initialSteps={steps}
+        itemActions={<ItemActions itemId={item.id} status={item.status} />}
+      />
 
-        <div className="flex items-center gap-3 flex-wrap">
-          {!isDone && (
-            <Link
-              href={`/item/${item.id}/sesion`}
-              className="rounded-lg bg-accent px-5 py-2.5 font-medium text-bg hover:opacity-90"
-            >
-              ▶ Empezar sesión
-            </Link>
-          )}
-          {isDone && (
-            <div className="text-success text-sm">
-              ✓ Terminado · {item.completed_at && formatRelative(item.completed_at)}
-            </div>
-          )}
-          <ItemActions itemId={item.id} status={item.status} />
+      <section className="space-y-3">
+        <h2 className="text-xs uppercase tracking-wider text-muted">Tipo de proyecto</h2>
+        <ItemScopeEditor itemId={item.id} currentScope={scope} />
+      </section>
+
+      <section className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xs uppercase tracking-wider text-muted">Detalles del ítem</h2>
         </div>
+        <ItemDetailsEditor
+          item={{
+            id: item.id,
+            title: item.title,
+            kind: item.kind as ItemKind,
+            unit_type: item.unit_type as UnitType,
+            total_units: Number(item.total_units),
+            source_url: item.source_url ?? null,
+          }}
+        />
       </section>
 
       <section className="space-y-3">
@@ -146,9 +159,11 @@ export default async function ItemDetailPage({
                   </p>
                   {s.note && <p className="text-xs text-muted mt-1 line-clamp-2">{s.note}</p>}
                 </div>
-                <span className="tabular text-sm text-success shrink-0">
-                  +{Number(s.units_progressed)} {unitLabel(item.unit_type, Number(s.units_progressed))}
-                </span>
+                {!hasSteps && (
+                  <span className="tabular text-sm text-success shrink-0">
+                    +{Number(s.units_progressed)} {unitLabel(item.unit_type, Number(s.units_progressed))}
+                  </span>
+                )}
               </li>
             ))}
           </ul>

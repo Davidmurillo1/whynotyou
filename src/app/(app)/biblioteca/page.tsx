@@ -3,7 +3,7 @@ import { createSupabaseServerClient } from '@/lib/supabase/server'
 import { ProgressRing } from '@/components/progress-ring'
 import { CategoryBadge } from '@/components/category-badge'
 import { EmptyState } from '@/components/empty-state'
-import { kindLabel, statusLabel, unitLabel } from '@/lib/items/constants'
+import { kindLabel, statusLabel, unitLabel, type ItemScope } from '@/lib/items/constants'
 
 export const metadata = { title: 'Biblioteca · Why Not You?' }
 export const dynamic = 'force-dynamic'
@@ -19,20 +19,42 @@ type Item = {
   current_units: number
   status: string
   category_id: string | null
+  scope: ItemScope
 }
 
-export default async function BibliotecaPage() {
+type ScopeFilter = 'all' | ItemScope
+
+function parseScope(raw: string | string[] | undefined): ScopeFilter {
+  const value = Array.isArray(raw) ? raw[0] : raw
+  if (value === 'study' || value === 'work') return value
+  return 'all'
+}
+
+export default async function BibliotecaPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ scope?: string }>
+}) {
+  const params = await searchParams
+  const scopeFilter = parseScope(params.scope)
+
   const supabase = await createSupabaseServerClient()
   const {
     data: { user },
   } = await supabase.auth.getUser()
 
+  let itemsQuery = supabase
+    .from('items')
+    .select('id, title, kind, unit_type, total_units, current_units, status, category_id, scope, updated_at')
+    .eq('user_id', user!.id)
+    .order('updated_at', { ascending: false })
+
+  if (scopeFilter !== 'all') {
+    itemsQuery = itemsQuery.eq('scope', scopeFilter)
+  }
+
   const [{ data: items }, { data: cats }] = await Promise.all([
-    supabase
-      .from('items')
-      .select('id, title, kind, unit_type, total_units, current_units, status, category_id, updated_at')
-      .eq('user_id', user!.id)
-      .order('updated_at', { ascending: false }),
+    itemsQuery,
     supabase
       .from('categories')
       .select('id, name, color, emoji')
@@ -47,13 +69,22 @@ export default async function BibliotecaPage() {
     items: list.filter((i) => i.status === status),
   })).filter((g) => g.items.length > 0)
 
+  const tabs: { value: ScopeFilter; label: string }[] = [
+    { value: 'all', label: 'Todo' },
+    { value: 'study', label: 'Estudio' },
+    { value: 'work', label: 'Trabajo' },
+  ]
+
   return (
     <div className="space-y-8">
       <header className="flex items-end justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Biblioteca</h1>
           <p className="text-sm text-muted mt-1">
-            {list.length} {list.length === 1 ? 'ítem' : 'ítems'} en total
+            {list.length} {list.length === 1 ? 'ítem' : 'ítems'}
+            {scopeFilter !== 'all' && (
+              <> con scope <span className="text-text">{scopeFilter === 'study' ? 'Estudio' : 'Trabajo'}</span></>
+            )}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -72,10 +103,38 @@ export default async function BibliotecaPage() {
         </div>
       </header>
 
+      <nav className="inline-flex items-center gap-1 rounded-lg border border-border bg-surface p-1" aria-label="Filtrar por tipo de proyecto">
+        {tabs.map((tab) => {
+          const active = scopeFilter === tab.value
+          const href = tab.value === 'all' ? '/biblioteca' : `/biblioteca?scope=${tab.value}`
+          return (
+            <Link
+              key={tab.value}
+              href={href}
+              className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                active ? 'bg-accent/15 text-accent' : 'text-muted hover:text-text'
+              }`}
+            >
+              {tab.label}
+            </Link>
+          )
+        })}
+      </nav>
+
       {list.length === 0 ? (
         <EmptyState
-          title="Tu biblioteca está vacía."
-          description="Agregá lo primero que estés aprendiendo y empezá."
+          title={
+            scopeFilter === 'all'
+              ? 'Tu biblioteca está vacía.'
+              : scopeFilter === 'work'
+                ? 'No tenés proyectos de trabajo todavía.'
+                : 'No tenés ítems de estudio en esta vista.'
+          }
+          description={
+            scopeFilter === 'all'
+              ? 'Agregá lo primero que tengas entre manos y empezá.'
+              : 'Cambiá de filtro o agregá uno nuevo.'
+          }
           action={
             <Link
               href="/item/nuevo"
@@ -105,6 +164,7 @@ export default async function BibliotecaPage() {
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
                           <p className="font-medium truncate">{item.title}</p>
+                          <ScopeChip scope={item.scope ?? 'study'} />
                         </div>
                         <div className="flex items-center gap-2 mt-1">
                           <p className="text-xs text-muted">
@@ -128,5 +188,20 @@ export default async function BibliotecaPage() {
         ))
       )}
     </div>
+  )
+}
+
+function ScopeChip({ scope }: { scope: ItemScope }) {
+  const isWork = scope === 'work'
+  return (
+    <span
+      className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded font-medium ${
+        isWork
+          ? 'bg-accent/15 text-accent'
+          : 'bg-surface-2 text-muted'
+      }`}
+    >
+      {isWork ? 'Trabajo' : 'Estudio'}
+    </span>
   )
 }

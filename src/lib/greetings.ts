@@ -4,6 +4,9 @@ type GreetingContext = {
   streakDays: number
   daysSinceLastSession: number | null
   activeItemCount: number
+  /** True si el usuario tiene al menos un ítem activo con `scope = 'work'`.
+   *  Cuando es true, el copy adopta una voz neutral que no privilegia "estudio". */
+  hasWork?: boolean
 }
 
 const HOUR_NOW = () => new Date().getHours()
@@ -26,10 +29,14 @@ export function getGreeting(ctx: GreetingContext): { title: string; subtitle: st
   } as const
   const title = titleByTod[tod]
 
+  const hasWork = Boolean(ctx.hasWork)
+
   let subtitle: string
 
   if (ctx.activeItemCount === 0) {
-    subtitle = 'Acá va a vivir todo lo que estés aprendiendo. ¿Con qué arrancamos?'
+    subtitle = hasWork
+      ? 'Acá va a vivir todo lo que tengas entre manos. ¿Con qué arrancamos?'
+      : 'Acá va a vivir todo lo que estés aprendiendo. ¿Con qué arrancamos?'
   } else if (ctx.hasSessionToday) {
     subtitle =
       ctx.streakDays >= 7
@@ -44,7 +51,9 @@ export function getGreeting(ctx: GreetingContext): { title: string; subtitle: st
   } else if (ctx.daysSinceLastSession <= 7) {
     subtitle = 'Volviste después de una pausa. Eso cuenta el doble.'
   } else {
-    subtitle = 'Hace rato que no aparecés. Lo difícil ya es esto: abrir la app.'
+    subtitle = hasWork
+      ? 'Hace rato que no aparecés. Lo difícil ya es esto: abrir la app.'
+      : 'Hace rato que no aparecés. Lo difícil ya es esto: abrir la app.'
   }
 
   return { title, subtitle }

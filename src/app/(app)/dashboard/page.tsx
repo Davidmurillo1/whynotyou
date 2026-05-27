@@ -3,7 +3,8 @@ import { createSupabaseServerClient } from '@/lib/supabase/server'
 import { ProgressRing } from '@/components/progress-ring'
 import { EmptyState } from '@/components/empty-state'
 import { getGreeting } from '@/lib/greetings'
-import { unitLabel } from '@/lib/items/constants'
+import { unitLabel, type ItemScope } from '@/lib/items/constants'
+import { computeItemProgress, stepsSummary, type StepLike } from '@/lib/items/progress'
 
 export const metadata = { title: 'Hoy · Why Not You?' }
 export const dynamic = 'force-dynamic'
@@ -17,7 +18,10 @@ type Item = {
   current_units: number
   status: string
   updated_at: string
+  scope: ItemScope
 }
+
+type StepRow = StepLike & { item_id: string; id: string }
 
 export default async function DashboardPage() {
   const supabase = await createSupabaseServerClient()
@@ -35,7 +39,7 @@ export default async function DashboardPage() {
         .single(),
       supabase
         .from('items')
-        .select('id, title, kind, unit_type, total_units, current_units, status, updated_at')
+        .select('id, title, kind, unit_type, total_units, current_units, status, scope, updated_at')
         .eq('user_id', user!.id)
         .eq('status', 'active')
         .order('updated_at', { ascending: false }),
@@ -50,9 +54,32 @@ export default async function DashboardPage() {
     ])
 
   const itemsList = (items ?? []) as Item[]
+  const itemIds = itemsList.map((i) => i.id)
+
+  // Traemos los pasos solo de los ítems activos en una sola consulta
+  let stepsByItem = new Map<string, StepRow[]>()
+  if (itemIds.length > 0) {
+    const { data: stepsRaw } = await supabase
+      .from('item_steps')
+      .select('id, item_id, weight_pct, is_done, parent_step_id, progress_mode')
+      .in('item_id', itemIds)
+      .eq('user_id', user!.id)
+    const rows = (stepsRaw ?? []) as StepRow[]
+    stepsByItem = rows.reduce((acc, row) => {
+      const list = acc.get(row.item_id) ?? []
+      list.push(row)
+      acc.set(row.item_id, list)
+      return acc
+    }, new Map<string, StepRow[]>())
+  }
+
   const todayId = todayPickId as string | null
   const pickedItem = todayId ? itemsList.find((i) => i.id === todayId) : null
   const otherItems = todayId ? itemsList.filter((i) => i.id !== todayId) : itemsList
+
+  const studyItems = otherItems.filter((i) => (i.scope ?? 'study') === 'study')
+  const workItems = otherItems.filter((i) => i.scope === 'work')
+  const hasWork = itemsList.some((i) => i.scope === 'work')
 
   const tz = profile?.timezone ?? 'UTC'
   const todayLocal = new Date(new Date().toLocaleString('en-US', { timeZone: tz }))
@@ -70,6 +97,7 @@ export default async function DashboardPage() {
     streakDays: streak?.current ?? 0,
     daysSinceLastSession,
     activeItemCount: itemsList.length,
+    hasWork,
   })
 
   return (
@@ -90,8 +118,12 @@ export default async function DashboardPage() {
 
       {itemsList.length === 0 && (
         <EmptyState
-          title="Una sola cosa basta. Después agregás más."
-          description="Empezá con lo que ya estás aprendiendo ahora."
+          title={hasWork ? 'Una sola cosa basta. Después agregás más.' : 'Una sola cosa basta. Después agregás más.'}
+          description={
+            hasWork
+              ? 'Empezá con lo que ya tenés entre manos ahora.'
+              : 'Empezá con lo que ya estás aprendiendo ahora.'
+          }
           action={
             <Link
               href="/item/nuevo"
@@ -106,21 +138,39 @@ export default async function DashboardPage() {
       {pickedItem && (
         <section className="space-y-3">
           <h2 className="text-xs uppercase tracking-wider text-muted">Hoy toca esto</h2>
-          <ItemHero item={pickedItem} />
+          <ItemHero item={pickedItem} steps={stepsByItem.get(pickedItem.id) ?? []} />
         </section>
       )}
 
-      {otherItems.length > 0 && (
-        <section className="space-y-3">
-          <h2 className="text-xs uppercase tracking-wider text-muted">
-            {pickedItem ? 'Otros en curso' : 'En curso'}
-          </h2>
-          <ul className="space-y-2">
-            {otherItems.map((item) => (
-              <ItemRow key={item.id} item={item} />
-            ))}
-          </ul>
-        </section>
+      {studyItems.length > 0 && workItems.length > 0 && (
+        <>
+          <ItemListSection
+            title="Estudio"
+            items={studyItems}
+            stepsByItem={stepsByItem}
+          />
+          <ItemListSection
+            title="Trabajo"
+            items={workItems}
+            stepsByItem={stepsByItem}
+          />
+        </>
+      )}
+
+      {studyItems.length > 0 && workItems.length === 0 && (
+        <ItemListSection
+          title={pickedItem ? 'Otros en curso' : 'En curso'}
+          items={studyItems}
+          stepsByItem={stepsByItem}
+        />
+      )}
+
+      {workItems.length > 0 && studyItems.length === 0 && (
+        <ItemListSection
+          title={pickedItem ? 'Otros en curso' : 'En curso'}
+          items={workItems}
+          stepsByItem={stepsByItem}
+        />
       )}
 
       {itemsList.length > 0 && (
@@ -137,8 +187,32 @@ export default async function DashboardPage() {
   )
 }
 
-function ItemHero({ item }: { item: Item }) {
-  const pct = Number(item.current_units) / Number(item.total_units)
+function ItemListSection({
+  title,
+  items,
+  stepsByItem,
+}: {
+  title: string
+  items: Item[]
+  stepsByItem: Map<string, StepRow[]>
+}) {
+  if (items.length === 0) return null
+  return (
+    <section className="space-y-3">
+      <h2 className="text-xs uppercase tracking-wider text-muted">{title}</h2>
+      <ul className="space-y-2">
+        {items.map((item) => (
+          <ItemRow key={item.id} item={item} steps={stepsByItem.get(item.id) ?? []} />
+        ))}
+      </ul>
+    </section>
+  )
+}
+
+function ItemHero({ item, steps }: { item: Item; steps: StepRow[] }) {
+  const pct = computeItemProgress(item, steps)
+  const summary = stepsSummary(steps)
+  const hasSteps = summary.total > 0
   return (
     <div className="rounded-2xl border border-border bg-surface p-5">
       <Link href={`/item/${item.id}`} className="flex items-center gap-5 group">
@@ -148,7 +222,15 @@ function ItemHero({ item }: { item: Item }) {
             {item.title}
           </h3>
           <p className="text-sm text-muted mt-1">
-            {item.current_units} de {item.total_units} {unitLabel(item.unit_type, item.total_units)}
+            {hasSteps ? (
+              <>
+                {summary.done} de {summary.total} módulos completados
+              </>
+            ) : (
+              <>
+                {item.current_units} de {item.total_units} {unitLabel(item.unit_type, item.total_units)}
+              </>
+            )}
           </p>
         </div>
       </Link>
@@ -164,8 +246,10 @@ function ItemHero({ item }: { item: Item }) {
   )
 }
 
-function ItemRow({ item }: { item: Item }) {
-  const pct = Number(item.current_units) / Number(item.total_units)
+function ItemRow({ item, steps }: { item: Item; steps: StepRow[] }) {
+  const pct = computeItemProgress(item, steps)
+  const summary = stepsSummary(steps)
+  const hasSteps = summary.total > 0
   return (
     <li>
       <Link
@@ -177,7 +261,15 @@ function ItemRow({ item }: { item: Item }) {
           <div className="min-w-0">
             <p className="font-medium truncate">{item.title}</p>
             <p className="text-xs text-muted">
-              {item.current_units} / {item.total_units} {unitLabel(item.unit_type, item.total_units)}
+              {hasSteps ? (
+                <>
+                  {summary.done}/{summary.total} módulos
+                </>
+              ) : (
+                <>
+                  {item.current_units} / {item.total_units} {unitLabel(item.unit_type, item.total_units)}
+                </>
+              )}
             </p>
           </div>
         </div>
