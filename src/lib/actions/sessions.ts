@@ -9,30 +9,33 @@ export type SessionResult =
   | { error: string }
   | { ok: true; itemCompleted: boolean; sessionId: string; highlight: Highlight }
 
-/**
- * Registra una sesión de aprendizaje/trabajo.
- *
- * - Sin `step_id`: insert directo en `sessions` como antes.
- * - Con `step_id`: usa la RPC `create_session_with_step` para insertar la sesión
- *   y, si `complete_step = true`, marcar el paso como done atómicamente.
- *
- * Sobre `step_id` colgado: como la columna usa ON DELETE SET NULL, si en algún
- * momento se borra el paso referenciado, la sesión sobrevive con `step_id = null`
- * y sus minutos siguen contando para el scope del ítem. No hace falta limpieza.
- */
 export async function createSessionAction(input: {
   item_id: string
   started_at: string
   duration_seconds: number
   units_progressed: number
   note?: string
+  steps?: Array<{ step_id: string; complete: boolean }>
+  /** @deprecated usar steps */
   step_id?: string
+  /** @deprecated usar steps */
   complete_step?: boolean
 }): Promise<SessionResult> {
-  const parsed = createSessionSchema.safeParse(input)
+  // Retrocompat: si llega el par viejo (step_id + complete_step) y no hay steps,
+  // lo normalizamos al nuevo formato.
+  let normalizedInput = input
+  if (!input.steps && input.step_id) {
+    normalizedInput = {
+      ...input,
+      steps: [{ step_id: input.step_id, complete: Boolean(input.complete_step) }],
+    }
+  }
+
+  const parsed = createSessionSchema.safeParse(normalizedInput)
   if (!parsed.success) {
     return { error: parsed.error.issues[0].message }
   }
+
   const supabase = await createSupabaseServerClient()
   const {
     data: { user },
@@ -49,21 +52,18 @@ export async function createSessionAction(input: {
     return { error: 'No encontramos ese ítem.' }
   }
 
-  const stepId = parsed.data.step_id ? String(parsed.data.step_id) : null
-  const completeStep = Boolean(parsed.data.complete_step)
-
+  const steps = parsed.data.steps ?? []
   let sessionId: string
 
-  if (stepId) {
-    // Camino atómico vía RPC: insert sesión + (opcional) marcar paso como done.
-    const { data, error } = await supabase.rpc('create_session_with_step', {
+  if (steps.length > 0) {
+    // Camino atómico vía RPC: insert sesión + asociaciones + (opcional) marcar pasos.
+    const { data, error } = await supabase.rpc('create_session_with_steps', {
       p_item_id: parsed.data.item_id,
       p_started_at: parsed.data.started_at,
       p_duration_seconds: parsed.data.duration_seconds,
       p_units_progressed: parsed.data.units_progressed,
       p_note: parsed.data.note || null,
-      p_step_id: stepId,
-      p_complete_step: completeStep,
+      p_steps: steps.map((s) => ({ step_id: s.step_id, complete: s.complete })),
     })
     if (error || !data) {
       if (error?.message?.includes('STEP_NOT_FOUND')) {
@@ -72,10 +72,14 @@ export async function createSessionAction(input: {
       if (error?.message?.includes('ITEM_NOT_FOUND')) {
         return { error: 'No encontramos ese ítem.' }
       }
+      if (error?.message?.includes('ITEM_NOT_OWNED')) {
+        return { error: 'No encontramos ese ítem.' }
+      }
       return { error: 'No pudimos guardar la sesión.' }
     }
     sessionId = data as string
   } else {
+    // Sin pasos: insert directo en sessions.
     const { data: inserted, error } = await supabase
       .from('sessions')
       .insert({
@@ -100,13 +104,12 @@ export async function createSessionAction(input: {
   const newTotalUnits = Number(item.current_units) + Number(parsed.data.units_progressed)
   let itemCompleted = newTotalUnits >= Number(item.total_units)
 
-  // Si el ítem tiene pasos, dejar que el modelo de pasos mande.
-  const { data: steps } = await supabase
+  const { data: stepsRows } = await supabase
     .from('item_steps')
     .select('is_done')
     .eq('item_id', parsed.data.item_id)
-  if (steps && steps.length > 0) {
-    itemCompleted = steps.every((s) => Boolean(s.is_done))
+  if (stepsRows && stepsRows.length > 0) {
+    itemCompleted = stepsRows.every((s) => Boolean(s.is_done))
   }
 
   const highlight = await calculateHighlight(supabase, user.id, {

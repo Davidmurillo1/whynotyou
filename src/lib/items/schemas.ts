@@ -12,13 +12,23 @@ export const createItemSchema = z.object({
 
 export type CreateItemInput = z.infer<typeof createItemSchema>
 
+export const sessionStepSchema = z.object({
+  step_id: z.string().uuid(),
+  complete: z.boolean().default(false),
+})
+
+export type SessionStepInput = z.infer<typeof sessionStepSchema>
+
 export const createSessionSchema = z.object({
   item_id: z.string().uuid(),
   started_at: z.string(),
   duration_seconds: z.coerce.number().int().min(0).max(86400),
   units_progressed: z.coerce.number().min(0),
   note: z.string().trim().max(2000).optional().or(z.literal('')),
+  steps: z.array(sessionStepSchema).max(50).optional(),
+  /** @deprecated Usar `steps` en su lugar */
   step_id: z.string().uuid().optional().or(z.literal('')),
+  /** @deprecated Usar `steps` en su lugar */
   complete_step: z.coerce.boolean().optional(),
 })
 

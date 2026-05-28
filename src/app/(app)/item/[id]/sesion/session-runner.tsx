@@ -13,6 +13,7 @@ type StepOption = {
   name: string
   weight_pct: number
   is_done: boolean
+  parent_step_id: string | null
 }
 
 type Props = {
@@ -24,6 +25,8 @@ type Props = {
   totalUnits: number
   steps: StepOption[]
 }
+
+type Selection = { selected: boolean; complete: boolean }
 
 export function SessionRunner({
   itemId,
@@ -44,8 +47,7 @@ export function SessionRunner({
   const [phase, setPhase] = useState<'running' | 'capture' | 'done'>('running')
   const [targetUnits, setTargetUnits] = useState<string>(String(currentUnits))
   const [note, setNote] = useState('')
-  const [selectedStepId, setSelectedStepId] = useState<string>('')
-  const [completeStep, setCompleteStep] = useState(false)
+  const [selections, setSelections] = useState<Record<string, Selection>>({})
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [celebrationTier, setCelebrationTier] = useState<'small' | 'medium' | 'large' | null>(null)
@@ -54,6 +56,11 @@ export function SessionRunner({
 
   const hasSteps = steps.length > 0
   const pendingSteps = steps.filter((s) => !s.is_done)
+  const doneSteps = steps.filter((s) => s.is_done)
+
+  // Módulos raíz con al menos una tarea hija (is_done es derivado — no se puede completar manual)
+  const moduleIds = new Set(steps.filter((s) => !s.parent_step_id).map((s) => s.id))
+  const hasChildren = (id: string) => steps.some((s) => s.parent_step_id === id)
 
   useEffect(() => {
     if (phase !== 'running') return
@@ -91,50 +98,78 @@ export function SessionRunner({
   const handleSave = async () => {
     setError(null)
     setSubmitting(true)
-    const reachedNum = Number(targetUnits)
-    const delta = Number.isFinite(reachedNum) ? reachedNum - currentUnits : 0
-    if (delta < 0) {
-      setError('Ese número es menor al que tenías. ¿Querés ajustarlo?')
-      setSubmitting(false)
+
+    const selectedSteps = Object.entries(selections)
+      .filter(([, s]) => s.selected)
+      .map(([step_id, s]) => ({ step_id, complete: s.complete }))
+
+    if (!hasSteps) {
+      const reachedNum = Number(targetUnits)
+      const delta = Number.isFinite(reachedNum) ? reachedNum - currentUnits : 0
+      if (delta < 0) {
+        setError('Ese número es menor al que tenías. ¿Querés ajustarlo?')
+        setSubmitting(false)
+        return
+      }
+      const result = await createSessionAction({
+        item_id: itemId,
+        started_at: startedAt,
+        duration_seconds: Math.max(0, Math.min(86400, elapsed)),
+        units_progressed: delta,
+        note: note.trim() || undefined,
+      })
+      if ('error' in result) { setError(result.error); setSubmitting(false); return }
+      finishSession(result, delta > 0, false)
       return
     }
+
+    const anyComplete = selectedSteps.some((s) => s.complete)
     const result = await createSessionAction({
       item_id: itemId,
       started_at: startedAt,
       duration_seconds: Math.max(0, Math.min(86400, elapsed)),
-      units_progressed: delta,
+      units_progressed: 0,
       note: note.trim() || undefined,
-      step_id: selectedStepId || undefined,
-      complete_step: selectedStepId ? completeStep : undefined,
+      steps: selectedSteps,
     })
-    if ('error' in result) {
-      setError(result.error)
-      setSubmitting(false)
-      return
-    }
-    setCelebrationTier(result.itemCompleted ? 'large' : delta > 0 || completeStep ? 'medium' : 'small')
+    if ('error' in result) { setError(result.error); setSubmitting(false); return }
+    finishSession(result, false, anyComplete)
+  }
+
+  const finishSession = (
+    result: { ok: true; itemCompleted: boolean; sessionId: string; highlight: Highlight },
+    hadUnits: boolean,
+    hadComplete: boolean,
+  ) => {
+    setCelebrationTier(result.itemCompleted ? 'large' : hadUnits || hadComplete ? 'medium' : 'small')
     setHighlight(result.highlight)
     setItemCompleted(result.itemCompleted)
     setPhase('done')
 
     if (result.itemCompleted) {
-      setTimeout(() => {
-        router.push(`/item/${itemId}/completado`)
-      }, 1200)
+      setTimeout(() => router.push(`/item/${itemId}/completado`), 1200)
     } else {
-      setTimeout(() => {
-        router.push(`/item/${itemId}`)
-        router.refresh()
-      }, 2400)
+      setTimeout(() => { router.push(`/item/${itemId}`); router.refresh() }, 2400)
     }
   }
 
   const handleCancel = () => {
-    if (elapsed < 5) {
-      router.push(`/item/${itemId}`)
-      return
-    }
+    if (elapsed < 5) { router.push(`/item/${itemId}`); return }
     setPhase('capture')
+  }
+
+  const toggleSelected = (stepId: string) => {
+    setSelections((prev) => {
+      const cur = prev[stepId] ?? { selected: false, complete: false }
+      return { ...prev, [stepId]: { selected: !cur.selected, complete: !cur.selected ? cur.complete : false } }
+    })
+  }
+
+  const toggleComplete = (stepId: string) => {
+    setSelections((prev) => {
+      const cur = prev[stepId] ?? { selected: true, complete: false }
+      return { ...prev, [stepId]: { ...cur, complete: !cur.complete } }
+    })
   }
 
   if (phase === 'done') {
@@ -170,51 +205,47 @@ export function SessionRunner({
 
         {hasSteps && (
           <div className="space-y-1.5">
-            <label htmlFor="step" className="block text-sm text-muted">
-              ¿En qué paso trabajaste?
-            </label>
-            <select
-              id="step"
-              value={selectedStepId}
-              onChange={(e) => {
-                setSelectedStepId(e.target.value)
-                setCompleteStep(false)
-              }}
-              className="w-full rounded-lg border border-border bg-surface px-3 py-2.5 focus:border-accent focus:outline-none"
-            >
-              <option value="">— Sin paso —</option>
+            <p className="block text-sm text-muted">¿En qué pasos trabajaste?</p>
+            <div className="rounded-lg border border-border bg-surface divide-y divide-border">
               {pendingSteps.length > 0 && (
-                <optgroup label="Pendientes">
-                  {pendingSteps.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name} ({s.weight_pct}%)
-                    </option>
+                <div>
+                  <p className="px-3 pt-2 pb-1 text-xs font-semibold uppercase tracking-wider text-muted">
+                    Pendientes
+                  </p>
+                  {pendingSteps.map((step) => (
+                    <StepRow
+                      key={step.id}
+                      step={step}
+                      selection={selections[step.id] ?? { selected: false, complete: false }}
+                      isChildless={moduleIds.has(step.id) ? !hasChildren(step.id) : true}
+                      isIndented={Boolean(step.parent_step_id)}
+                      isAlreadyDone={false}
+                      onToggleSelected={() => toggleSelected(step.id)}
+                      onToggleComplete={() => toggleComplete(step.id)}
+                    />
                   ))}
-                </optgroup>
+                </div>
               )}
-              {steps.filter((s) => s.is_done).length > 0 && (
-                <optgroup label="Ya completados">
-                  {steps
-                    .filter((s) => s.is_done)
-                    .map((s) => (
-                      <option key={s.id} value={s.id}>
-                        ✓ {s.name} ({s.weight_pct}%)
-                      </option>
-                    ))}
-                </optgroup>
+              {doneSteps.length > 0 && (
+                <div>
+                  <p className="px-3 pt-2 pb-1 text-xs font-semibold uppercase tracking-wider text-muted">
+                    Ya completados
+                  </p>
+                  {doneSteps.map((step) => (
+                    <StepRow
+                      key={step.id}
+                      step={step}
+                      selection={selections[step.id] ?? { selected: false, complete: false }}
+                      isChildless={moduleIds.has(step.id) ? !hasChildren(step.id) : true}
+                      isIndented={Boolean(step.parent_step_id)}
+                      isAlreadyDone={true}
+                      onToggleSelected={() => toggleSelected(step.id)}
+                      onToggleComplete={() => toggleComplete(step.id)}
+                    />
+                  ))}
+                </div>
               )}
-            </select>
-            {selectedStepId && (
-              <label className="flex items-center gap-2 text-sm text-text pt-1">
-                <input
-                  type="checkbox"
-                  checked={completeStep}
-                  onChange={(e) => setCompleteStep(e.target.checked)}
-                  className="w-4 h-4 accent-accent"
-                />
-                Marcar paso como completado
-              </label>
-            )}
+            </div>
           </div>
         )}
 
@@ -301,6 +332,73 @@ export function SessionRunner({
       >
         Cancelar sesión
       </button>
+    </div>
+  )
+}
+
+function StepRow({
+  step,
+  selection,
+  isChildless,
+  isIndented,
+  isAlreadyDone,
+  onToggleSelected,
+  onToggleComplete,
+}: {
+  step: StepOption
+  selection: Selection
+  isChildless: boolean
+  isIndented: boolean
+  isAlreadyDone: boolean
+  onToggleSelected: () => void
+  onToggleComplete: () => void
+}) {
+  const canComplete = isChildless && !isAlreadyDone
+  const isCompleted = selection.complete && canComplete
+
+  return (
+    <div className={`flex items-center gap-2 px-3 py-2.5 ${isIndented ? 'pl-7' : ''}`}>
+      <input
+        type="checkbox"
+        checked={selection.selected}
+        onChange={onToggleSelected}
+        className="w-4 h-4 shrink-0 accent-accent"
+      />
+      <span
+        className={`flex-1 text-sm leading-snug transition-all ${
+          isCompleted
+            ? 'line-through opacity-50'
+            : isAlreadyDone
+              ? 'text-muted'
+              : 'text-text'
+        }`}
+      >
+        {isAlreadyDone && '✓ '}{step.name}
+        <span className="text-muted ml-1 text-xs">({step.weight_pct}%)</span>
+      </span>
+
+      {selection.selected && (
+        <>
+          {canComplete ? (
+            <label className="flex items-center gap-1.5 text-xs text-muted shrink-0 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={selection.complete}
+                onChange={onToggleComplete}
+                className="w-3.5 h-3.5 accent-accent"
+              />
+              Terminé
+            </label>
+          ) : !isAlreadyDone ? (
+            <span
+              className="text-xs text-muted/60 shrink-0"
+              title="Se completa cuando termines todas sus tareas"
+            >
+              (se completa con sus tareas)
+            </span>
+          ) : null}
+        </>
+      )}
     </div>
   )
 }

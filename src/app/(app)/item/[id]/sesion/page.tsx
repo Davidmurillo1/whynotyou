@@ -39,6 +39,7 @@ export default async function SessionPage({
     name: s.name as string,
     weight_pct: Number(s.weight_pct),
     is_done: Boolean(s.is_done),
+    parent_step_id: (s.parent_step_id as string | null) ?? null,
   }))
 
   return (
