@@ -12,6 +12,7 @@ type StepOption = {
   id: string
   name: string
   weight_pct: number
+  position: number
   is_done: boolean
   parent_step_id: string | null
 }
@@ -55,12 +56,38 @@ export function SessionRunner({
   const [itemCompleted, setItemCompleted] = useState(false)
 
   const hasSteps = steps.length > 0
-  const pendingSteps = steps.filter((s) => !s.is_done)
-  const doneSteps = steps.filter((s) => s.is_done)
 
   // Módulos raíz con al menos una tarea hija (is_done es derivado — no se puede completar manual)
   const moduleIds = new Set(steps.filter((s) => !s.parent_step_id).map((s) => s.id))
   const hasChildren = (id: string) => steps.some((s) => s.parent_step_id === id)
+
+  // Ordena de forma jerárquica: módulos raíz por position, cada uno seguido de sus hijos por position.
+  // Necesario porque DB ordena por position global y las tareas (position 1,2,3…)
+  // siempre aparecen antes que sus módulos padre (position 11,12,13…).
+  function hierarchicalOrder(subset: StepOption[]): StepOption[] {
+    const subIds = new Set(subset.map((s) => s.id))
+    const roots = subset
+      .filter((s) => !s.parent_step_id)
+      .sort((a, b) => a.position - b.position)
+    const result: StepOption[] = []
+    for (const root of roots) {
+      result.push(root)
+      const children = subset
+        .filter((s) => s.parent_step_id === root.id)
+        .sort((a, b) => a.position - b.position)
+      result.push(...children)
+    }
+    // Tareas cuyo módulo padre NO está en el subset (padre ya completado u omitido):
+    // añadirlas al final para que no queden silenciadas.
+    const orphans = subset.filter(
+      (s) => s.parent_step_id && !subIds.has(s.parent_step_id),
+    )
+    result.push(...orphans)
+    return result
+  }
+
+  const pendingSteps = hierarchicalOrder(steps.filter((s) => !s.is_done))
+  const doneSteps = hierarchicalOrder(steps.filter((s) => s.is_done))
 
   useEffect(() => {
     if (phase !== 'running') return
@@ -374,7 +401,6 @@ function StepRow({
         }`}
       >
         {isAlreadyDone && '✓ '}{step.name}
-        <span className="text-muted ml-1 text-xs">({step.weight_pct}%)</span>
       </span>
 
       {selection.selected && (
