@@ -13,6 +13,7 @@ import { ItemCategoryEditor } from './item-category-editor'
 import { ItemScopeEditor } from './item-scope-editor'
 import { ItemDetailsEditor } from './item-details-editor'
 import { ItemProgressShell } from './item-progress-shell'
+import { ItemProjectsEditor } from './item-projects-editor'
 import { type Step } from './steps-editor'
 
 export const dynamic = 'force-dynamic'
@@ -28,7 +29,13 @@ export default async function ItemDetailPage({
     data: { user },
   } = await supabase.auth.getUser()
 
-  const [{ data: item }, { data: sessions }, { data: cats }, { data: stepsRaw }] = await Promise.all([
+  const [
+    { data: item },
+    { data: sessions },
+    { data: cats },
+    { data: stepsRaw },
+    { data: itemProjectRows },
+  ] = await Promise.all([
     supabase
       .from('items')
       .select(
@@ -54,6 +61,13 @@ export default async function ItemDetailPage({
       .eq('item_id', id)
       .eq('user_id', user!.id)
       .order('position', { ascending: true }),
+    // Solo los proyectos a los que pertenece este ítem (join PostgREST).
+    // El picker para gestionar pertenencia se carga lazy desde el cliente.
+    supabase
+      .from('project_items')
+      .select('project:projects!inner(id, name, color, emoji, status)')
+      .eq('item_id', id)
+      .eq('user_id', user!.id),
   ])
 
   if (!item) notFound()
@@ -141,6 +155,31 @@ export default async function ItemDetailPage({
           itemId={item.id}
           currentCategoryId={item.category_id}
           options={flatOptions}
+        />
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="text-xs uppercase tracking-wider text-muted">Proyectos</h2>
+        <ItemProjectsEditor
+          itemId={item.id}
+          currentProjects={((itemProjectRows ?? []) as unknown as Array<{
+            project: {
+              id: string
+              name: string
+              color: string
+              emoji: string | null
+              status: 'active' | 'archived'
+            } | null
+          }>)
+            .map((r) => r.project)
+            .filter((p): p is NonNullable<typeof p> => p !== null)
+            .map((p) => ({
+              id: p.id,
+              name: p.name,
+              color: p.color,
+              emoji: p.emoji,
+              status: p.status,
+            }))}
         />
       </section>
 

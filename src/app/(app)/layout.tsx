@@ -6,6 +6,7 @@ import { logoutAction } from '@/lib/actions/auth'
 const NAV = [
   { href: '/dashboard', label: 'Hoy' },
   { href: '/biblioteca', label: 'Biblioteca' },
+  { href: '/proyectos', label: 'Proyectos' },
   { href: '/categorias', label: 'Categorías' },
   { href: '/stats', label: 'Stats' },
   { href: '/ajustes', label: 'Ajustes' },
@@ -54,7 +55,7 @@ export default async function AppLayout({
       <main className="flex-1 max-w-3xl w-full mx-auto px-5 py-8">{children}</main>
 
       <nav className="md:hidden fixed bottom-0 inset-x-0 border-t border-border bg-bg/95 backdrop-blur">
-        <div className="grid grid-cols-5">
+        <div className="grid grid-cols-6">
           {NAV.map((n) => (
             <Link
               key={n.href}

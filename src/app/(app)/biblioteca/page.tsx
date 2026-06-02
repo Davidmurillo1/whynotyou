@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { createSupabaseServerClient } from '@/lib/supabase/server'
 import { ProgressRing } from '@/components/progress-ring'
 import { CategoryBadge } from '@/components/category-badge'
+import { ProjectBadge } from '@/components/project-badge'
 import { EmptyState } from '@/components/empty-state'
 import { kindLabel, statusLabel, unitLabel, type ItemScope } from '@/lib/items/constants'
 
@@ -53,16 +54,55 @@ export default async function BibliotecaPage({
     itemsQuery = itemsQuery.eq('scope', scopeFilter)
   }
 
-  const [{ data: items }, { data: cats }] = await Promise.all([
+  const [
+    { data: items },
+    { data: cats },
+    { data: memberships },
+    { data: projectsRaw },
+  ] = await Promise.all([
     itemsQuery,
     supabase
       .from('categories')
       .select('id, name, color, emoji')
       .eq('user_id', user!.id),
+    supabase
+      .from('project_items')
+      .select('item_id, project_id')
+      .eq('user_id', user!.id),
+    supabase
+      .from('projects')
+      .select('id, name, color, emoji, order_index')
+      .eq('user_id', user!.id)
+      .order('order_index', { ascending: true })
+      .order('created_at', { ascending: false }),
   ])
 
   const list = (items ?? []) as Item[]
   const catMap = new Map((cats ?? []).map((c) => [c.id, c]))
+  const projectMap = new Map(
+    (projectsRaw ?? []).map((p) => [
+      p.id as string,
+      {
+        name: p.name as string,
+        color: p.color as string,
+        emoji: (p.emoji as string | null) ?? null,
+        order_index: Number(p.order_index),
+      },
+    ]),
+  )
+  const itemProjects = new Map<string, string[]>()
+  for (const m of memberships ?? []) {
+    const arr = itemProjects.get(m.item_id as string) ?? []
+    arr.push(m.project_id as string)
+    itemProjects.set(m.item_id as string, arr)
+  }
+  for (const arr of itemProjects.values()) {
+    arr.sort((a, b) => {
+      const pa = projectMap.get(a)?.order_index ?? 0
+      const pb = projectMap.get(b)?.order_index ?? 0
+      return pa - pb
+    })
+  }
 
   const grouped = STATUS_ORDER.map((status) => ({
     status,
@@ -154,6 +194,11 @@ export default async function BibliotecaPage({
               {group.items.map((item) => {
                 const pct = Number(item.current_units) / Number(item.total_units)
                 const cat = item.category_id ? catMap.get(item.category_id) : null
+                const projectIds = itemProjects.get(item.id) ?? []
+                const firstProject = projectIds[0]
+                  ? projectMap.get(projectIds[0])
+                  : null
+                const extraProjects = projectIds.length - 1
                 return (
                   <li key={item.id}>
                     <Link
@@ -166,13 +211,24 @@ export default async function BibliotecaPage({
                           <p className="font-medium truncate">{item.title}</p>
                           <ScopeChip scope={item.scope ?? 'study'} />
                         </div>
-                        <div className="flex items-center gap-2 mt-1">
+                        <div className="flex items-center gap-2 mt-1 flex-wrap">
                           <p className="text-xs text-muted">
                             {kindLabel(item.kind)} · {item.current_units}/{item.total_units}{' '}
                             {unitLabel(item.unit_type, Number(item.total_units))}
                           </p>
                           {cat && (
                             <CategoryBadge name={cat.name} color={cat.color} emoji={cat.emoji} />
+                          )}
+                          {firstProject && (
+                            <ProjectBadge
+                              name={
+                                extraProjects > 0
+                                  ? `${firstProject.name} +${extraProjects}`
+                                  : firstProject.name
+                              }
+                              color={firstProject.color}
+                              emoji={firstProject.emoji}
+                            />
                           )}
                         </div>
                       </div>
