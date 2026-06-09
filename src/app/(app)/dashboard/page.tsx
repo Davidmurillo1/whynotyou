@@ -81,13 +81,19 @@ export default async function DashboardPage() {
     }, new Map<string, StepRow[]>())
   }
 
+  // Excluir ítems que ya están al 100% aunque su status siga como 'active'
+  const visibleItems = itemsList.filter((item) => {
+    const steps = stepsByItem.get(item.id) ?? []
+    return computeItemProgress(item, steps) < 1
+  })
+
   const todayId = todayPickId as string | null
-  const pickedItem = todayId ? itemsList.find((i) => i.id === todayId) : null
-  const otherItems = todayId ? itemsList.filter((i) => i.id !== todayId) : itemsList
+  const pickedItem = todayId ? visibleItems.find((i) => i.id === todayId) : null
+  const otherItems = todayId ? visibleItems.filter((i) => i.id !== todayId) : visibleItems
 
   const studyItems = otherItems.filter((i) => (i.scope ?? 'study') === 'study')
   const workItems = otherItems.filter((i) => i.scope === 'work')
-  const hasWork = itemsList.some((i) => i.scope === 'work')
+  const hasWork = visibleItems.some((i) => i.scope === 'work')
 
   const tz = profile?.timezone ?? 'UTC'
   const todayLocal = new Date(new Date().toLocaleString('en-US', { timeZone: tz }))
@@ -104,7 +110,7 @@ export default async function DashboardPage() {
     hasSessionToday,
     streakDays: streak?.current ?? 0,
     daysSinceLastSession,
-    activeItemCount: itemsList.length,
+    activeItemCount: visibleItems.length,
     hasWork,
   })
 
@@ -124,7 +130,7 @@ export default async function DashboardPage() {
         )}
       </section>
 
-      {itemsList.length === 0 && (
+      {visibleItems.length === 0 && (
         <EmptyState
           title={hasWork ? 'Una sola cosa basta. Después agregás más.' : 'Una sola cosa basta. Después agregás más.'}
           description={

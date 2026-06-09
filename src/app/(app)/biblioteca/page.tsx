@@ -5,11 +5,10 @@ import { CategoryBadge } from '@/components/category-badge'
 import { ProjectBadge } from '@/components/project-badge'
 import { EmptyState } from '@/components/empty-state'
 import { kindLabel, statusLabel, unitLabel, type ItemScope } from '@/lib/items/constants'
+import { computeItemProgress, type StepLike, type StepsWeightMode } from '@/lib/items/progress'
 
 export const metadata = { title: 'Biblioteca · Why Not You?' }
 export const dynamic = 'force-dynamic'
-
-const STATUS_ORDER = ['active', 'paused', 'done', 'abandoned'] as const
 
 type Item = {
   id: string
@@ -21,9 +20,13 @@ type Item = {
   status: string
   category_id: string | null
   scope: ItemScope
+  steps_weight_mode: StepsWeightMode | null
 }
 
+type ItemWithProgress = Item & { progress: number }
+
 type ScopeFilter = 'all' | ItemScope
+type ViewFilter = 'current' | 'done'
 
 function parseScope(raw: string | string[] | undefined): ScopeFilter {
   const value = Array.isArray(raw) ? raw[0] : raw
@@ -31,13 +34,28 @@ function parseScope(raw: string | string[] | undefined): ScopeFilter {
   return 'all'
 }
 
+function parseView(raw: string | string[] | undefined): ViewFilter {
+  const value = Array.isArray(raw) ? raw[0] : raw
+  if (value === 'done') return 'done'
+  return 'current'
+}
+
+function buildHref(view: ViewFilter, scope: ScopeFilter): string {
+  const params = new URLSearchParams()
+  if (view !== 'current') params.set('view', view)
+  if (scope !== 'all') params.set('scope', scope)
+  const qs = params.toString()
+  return qs ? `/biblioteca?${qs}` : '/biblioteca'
+}
+
 export default async function BibliotecaPage({
   searchParams,
 }: {
-  searchParams: Promise<{ scope?: string }>
+  searchParams: Promise<{ scope?: string; view?: string }>
 }) {
   const params = await searchParams
   const scopeFilter = parseScope(params.scope)
+  const viewFilter = parseView(params.view)
 
   const supabase = await createSupabaseServerClient()
   const {
@@ -46,7 +64,7 @@ export default async function BibliotecaPage({
 
   let itemsQuery = supabase
     .from('items')
-    .select('id, title, kind, unit_type, total_units, current_units, status, category_id, scope, updated_at')
+    .select('id, title, kind, unit_type, total_units, current_units, status, category_id, scope, steps_weight_mode, updated_at')
     .eq('user_id', user!.id)
     .order('updated_at', { ascending: false })
 
@@ -104,24 +122,71 @@ export default async function BibliotecaPage({
     })
   }
 
-  const grouped = STATUS_ORDER.map((status) => ({
-    status,
-    items: list.filter((i) => i.status === status),
-  })).filter((g) => g.items.length > 0)
+  let stepsByItem = new Map<string, StepLike[]>()
+  const itemIds = list.map((i) => i.id)
+  if (itemIds.length > 0) {
+    const { data: stepsRaw } = await supabase
+      .from('item_steps')
+      .select('id, item_id, weight_pct, is_done, parent_step_id, progress_mode')
+      .in('item_id', itemIds)
+      .eq('user_id', user!.id)
+    const rows = (stepsRaw ?? []) as (StepLike & { item_id: string })[]
+    stepsByItem = rows.reduce((acc, row) => {
+      const existing = acc.get(row.item_id) ?? []
+      existing.push(row)
+      acc.set(row.item_id, existing)
+      return acc
+    }, new Map<string, StepLike[]>())
+  }
 
-  const tabs: { value: ScopeFilter; label: string }[] = [
+  // Precomputar progreso por ítem una sola vez
+  const itemsWithProgress: ItemWithProgress[] = list.map((item) => ({
+    ...item,
+    progress: computeItemProgress(item, stepsByItem.get(item.id) ?? []),
+  }))
+
+  // Clasificación: "completado" = status 'done' o progreso >= 1.
+  // "Abandonado" = solo cuando status='abandoned' y no llegó al 100%.
+  const isCompleted = (i: ItemWithProgress) => i.status === 'done' || i.progress >= 1
+  const isAbandonedOnly = (i: ItemWithProgress) =>
+    i.status === 'abandoned' && i.progress < 1
+  const isFinalized = (i: ItemWithProgress) => isCompleted(i) || isAbandonedOnly(i)
+
+  const currentItems = itemsWithProgress.filter((i) => !isFinalized(i))
+  const finalizedItems = itemsWithProgress.filter(isFinalized)
+
+  const inProgressGroups = (['active', 'paused'] as const)
+    .map((status) => ({
+      status,
+      label: statusLabel(status),
+      items: currentItems.filter((i) => i.status === status),
+    }))
+    .filter((g) => g.items.length > 0)
+
+  const completedItems = finalizedItems.filter(isCompleted)
+  const abandonedItems = finalizedItems.filter(isAbandonedOnly)
+
+  const finalizedGroups = [
+    { key: 'done', label: 'Completado', items: completedItems },
+    { key: 'abandoned', label: 'Abandonado', items: abandonedItems },
+  ].filter((g) => g.items.length > 0)
+
+  const visibleGroups = viewFilter === 'current' ? inProgressGroups : finalizedGroups
+  const visibleCount = viewFilter === 'current' ? currentItems.length : finalizedItems.length
+
+  const scopeTabs: { value: ScopeFilter; label: string }[] = [
     { value: 'all', label: 'Todo' },
     { value: 'study', label: 'Estudio' },
     { value: 'work', label: 'Trabajo' },
   ]
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       <header className="flex items-end justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Biblioteca</h1>
           <p className="text-sm text-muted mt-1">
-            {list.length} {list.length === 1 ? 'ítem' : 'ítems'}
+            {list.length} {list.length === 1 ? 'ítem' : 'ítems'} en total
             {scopeFilter !== 'all' && (
               <> con scope <span className="text-text">{scopeFilter === 'study' ? 'Estudio' : 'Trabajo'}</span></>
             )}
@@ -143,14 +208,23 @@ export default async function BibliotecaPage({
         </div>
       </header>
 
-      <nav className="inline-flex items-center gap-1 rounded-lg border border-border bg-surface p-1" aria-label="Filtrar por tipo de proyecto">
-        {tabs.map((tab) => {
+      <ViewTabs
+        view={viewFilter}
+        scope={scopeFilter}
+        currentCount={currentItems.length}
+        finalizedCount={finalizedItems.length}
+      />
+
+      <nav
+        className="inline-flex items-center gap-1 rounded-lg border border-border bg-surface p-1"
+        aria-label="Filtrar por tipo de proyecto"
+      >
+        {scopeTabs.map((tab) => {
           const active = scopeFilter === tab.value
-          const href = tab.value === 'all' ? '/biblioteca' : `/biblioteca?scope=${tab.value}`
           return (
             <Link
               key={tab.value}
-              href={href}
+              href={buildHref(viewFilter, tab.value)}
               className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
                 active ? 'bg-accent/15 text-accent' : 'text-muted hover:text-text'
               }`}
@@ -184,66 +258,147 @@ export default async function BibliotecaPage({
             </Link>
           }
         />
+      ) : visibleCount === 0 ? (
+        <EmptyState
+          title={
+            viewFilter === 'current'
+              ? 'No tenés ítems en curso en esta vista.'
+              : 'Todavía no completaste ningún ítem en esta vista.'
+          }
+          description={
+            viewFilter === 'current'
+              ? 'Cambiá de filtro o agregá uno nuevo.'
+              : 'Cuando termines un ítem va a aparecer acá.'
+          }
+        />
       ) : (
-        grouped.map((group) => (
-          <section key={group.status} className="space-y-3">
-            <h2 className="text-xs uppercase tracking-wider text-muted">
-              {statusLabel(group.status)} · {group.items.length}
-            </h2>
-            <ul className="space-y-2">
-              {group.items.map((item) => {
-                const pct = Number(item.current_units) / Number(item.total_units)
-                const cat = item.category_id ? catMap.get(item.category_id) : null
-                const projectIds = itemProjects.get(item.id) ?? []
-                const firstProject = projectIds[0]
-                  ? projectMap.get(projectIds[0])
-                  : null
-                const extraProjects = projectIds.length - 1
-                return (
-                  <li key={item.id}>
-                    <Link
-                      href={`/item/${item.id}`}
-                      className="flex items-center gap-3 rounded-xl border border-border bg-surface px-4 py-3 hover:bg-surface-2 transition-colors"
-                    >
-                      <ProgressRing value={pct} size={40} stroke={4} showLabel={false} />
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <p className="font-medium truncate">{item.title}</p>
-                          <ScopeChip scope={item.scope ?? 'study'} />
-                        </div>
-                        <div className="flex items-center gap-2 mt-1 flex-wrap">
-                          <p className="text-xs text-muted">
-                            {kindLabel(item.kind)} · {item.current_units}/{item.total_units}{' '}
-                            {unitLabel(item.unit_type, Number(item.total_units))}
-                          </p>
-                          {cat && (
-                            <CategoryBadge name={cat.name} color={cat.color} emoji={cat.emoji} />
-                          )}
-                          {firstProject && (
-                            <ProjectBadge
-                              name={
-                                extraProjects > 0
-                                  ? `${firstProject.name} +${extraProjects}`
-                                  : firstProject.name
-                              }
-                              color={firstProject.color}
-                              emoji={firstProject.emoji}
-                            />
-                          )}
-                        </div>
-                      </div>
-                      <span className="tabular text-sm text-muted shrink-0">
-                        {Math.round(pct * 100)}%
-                      </span>
-                    </Link>
-                  </li>
-                )
-              })}
-            </ul>
-          </section>
-        ))
+        <div className="space-y-8">
+          {visibleGroups.map((group) => (
+            <section key={group.label} className="space-y-3">
+              <h2 className="text-xs uppercase tracking-wider text-muted">
+                {group.label} · {group.items.length}
+              </h2>
+              <ul className="space-y-2">
+                {group.items.map((item) => (
+                  <ItemRow
+                    key={item.id}
+                    item={item}
+                    catMap={catMap}
+                    itemProjects={itemProjects}
+                    projectMap={projectMap}
+                  />
+                ))}
+              </ul>
+            </section>
+          ))}
+        </div>
       )}
     </div>
+  )
+}
+
+function ViewTabs({
+  view,
+  scope,
+  currentCount,
+  finalizedCount,
+}: {
+  view: ViewFilter
+  scope: ScopeFilter
+  currentCount: number
+  finalizedCount: number
+}) {
+  const tabs: { value: ViewFilter; label: string; count: number }[] = [
+    { value: 'current', label: 'En curso', count: currentCount },
+    { value: 'done', label: 'Completados', count: finalizedCount },
+  ]
+  return (
+    <nav className="border-b border-border flex items-center gap-6" aria-label="Estado de los ítems">
+      {tabs.map((tab) => {
+        const active = view === tab.value
+        return (
+          <Link
+            key={tab.value}
+            href={buildHref(tab.value, scope)}
+            className={`relative -mb-px flex items-center gap-2 px-1 py-3 text-sm font-medium transition-colors ${
+              active
+                ? 'text-text border-b-2 border-accent'
+                : 'text-muted hover:text-text border-b-2 border-transparent'
+            }`}
+          >
+            {tab.label}
+            <span
+              className={`tabular text-xs rounded-full px-2 py-0.5 ${
+                active ? 'bg-accent/15 text-accent' : 'bg-surface-2 text-muted'
+              }`}
+            >
+              {tab.count}
+            </span>
+          </Link>
+        )
+      })}
+    </nav>
+  )
+}
+
+type CatMapEntry = { name: string; color: string; emoji: string | null }
+type ProjectMapEntry = { name: string; color: string; emoji: string | null; order_index: number }
+
+function ItemRow({
+  item,
+  catMap,
+  itemProjects,
+  projectMap,
+}: {
+  item: ItemWithProgress
+  catMap: Map<string, CatMapEntry>
+  itemProjects: Map<string, string[]>
+  projectMap: Map<string, ProjectMapEntry>
+}) {
+  const pct = item.progress
+  const cat = item.category_id ? catMap.get(item.category_id) : null
+  const projectIds = itemProjects.get(item.id) ?? []
+  const firstProject = projectIds[0] ? projectMap.get(projectIds[0]) : null
+  const extraProjects = projectIds.length - 1
+
+  return (
+    <li>
+      <Link
+        href={`/item/${item.id}`}
+        className="flex items-center gap-3 rounded-xl border border-border bg-surface px-4 py-3 hover:bg-surface-2 transition-colors"
+      >
+        <ProgressRing value={pct} size={40} stroke={4} showLabel={false} />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <p className="font-medium truncate">{item.title}</p>
+            <ScopeChip scope={item.scope ?? 'study'} />
+          </div>
+          <div className="flex items-center gap-2 mt-1 flex-wrap">
+            <p className="text-xs text-muted">
+              {kindLabel(item.kind)} · {item.current_units}/{item.total_units}{' '}
+              {unitLabel(item.unit_type, Number(item.total_units))}
+            </p>
+            {cat && (
+              <CategoryBadge name={cat.name} color={cat.color} emoji={cat.emoji} />
+            )}
+            {firstProject && (
+              <ProjectBadge
+                name={
+                  extraProjects > 0
+                    ? `${firstProject.name} +${extraProjects}`
+                    : firstProject.name
+                }
+                color={firstProject.color}
+                emoji={firstProject.emoji}
+              />
+            )}
+          </div>
+        </div>
+        <span className="tabular text-sm text-muted shrink-0">
+          {Math.round(pct * 100)}%
+        </span>
+      </Link>
+    </li>
   )
 }
 
