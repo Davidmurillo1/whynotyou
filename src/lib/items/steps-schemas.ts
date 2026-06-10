@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { deadlineFieldNullable } from '@/lib/deadlines/schemas'
 
 /** Modo de cálculo del progreso de un módulo (paso con hijos):
  *  - 'weighted': suma ponderada por `weight_pct` de cada tarea (default).
@@ -56,6 +57,7 @@ export const updateStepSchema = z.object({
   position: z.coerce.number().int().min(0).optional(),
   is_done: z.coerce.boolean().optional(),
   progress_mode: progressModeEnum.optional(),
+  deadline: deadlineFieldNullable,
 })
 export type UpdateStepInput = z.infer<typeof updateStepSchema>
 

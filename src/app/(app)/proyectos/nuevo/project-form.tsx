@@ -57,6 +57,19 @@ export function ProjectForm() {
       </div>
 
       <div className="space-y-1.5">
+        <label htmlFor="deadline" className="block text-sm text-muted">
+          Fecha límite <span className="text-muted/60">(opcional)</span>
+        </label>
+        <input
+          id="deadline"
+          name="deadline"
+          type="date"
+          className="w-full rounded-lg border border-border bg-surface px-3 py-2.5 focus:border-accent focus:outline-none"
+        />
+        <p className="text-xs text-muted/80">¿Para cuándo querés cerrar este proyecto?</p>
+      </div>
+
+      <div className="space-y-1.5">
         <label className="block text-sm text-muted">Color</label>
         <div className="flex flex-wrap gap-2">
           {PROJECT_COLORS.map((c) => (

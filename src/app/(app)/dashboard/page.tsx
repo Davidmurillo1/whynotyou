@@ -2,8 +2,17 @@ import Link from 'next/link'
 import { createSupabaseServerClient } from '@/lib/supabase/server'
 import { ProgressRing } from '@/components/progress-ring'
 import { EmptyState } from '@/components/empty-state'
+import { DeadlineBadge } from '@/components/deadline-badge'
 import { getGreeting } from '@/lib/greetings'
 import { unitLabel, type ItemScope } from '@/lib/items/constants'
+import { fetchDeadlineEntries } from '@/lib/deadlines/queries'
+import {
+  dateInTimezone,
+  daysLeft,
+  formatDeadlineLabel,
+  todayInTimezone,
+  type DeadlineEntry,
+} from '@/lib/deadlines/utils'
 import {
   computeItemProgress,
   stepsSummary,
@@ -96,14 +105,16 @@ export default async function DashboardPage() {
   const hasWork = visibleItems.some((i) => i.scope === 'work')
 
   const tz = profile?.timezone ?? 'UTC'
-  const todayLocal = new Date(new Date().toLocaleString('en-US', { timeZone: tz }))
-    .toISOString()
-    .slice(0, 10)
-  const hasSessionToday =
-    !!lastSession?.started_at && new Date(lastSession.started_at).toISOString().slice(0, 10) === todayLocal
-  const daysSinceLastSession = lastSession?.started_at
-    ? Math.floor((Date.now() - new Date(lastSession.started_at).getTime()) / 86400000)
+  const today = todayInTimezone(tz)
+  // Día calendario (en la tz del perfil) de la última sesión — sin Date.now()
+  // en render: todas las comparaciones son entre fechas YYYY-MM-DD.
+  const lastSessionDay = lastSession?.started_at
+    ? dateInTimezone(new Date(lastSession.started_at), tz)
     : null
+  const hasSessionToday = lastSessionDay === today
+  const daysSinceLastSession = lastSessionDay ? daysLeft(today, lastSessionDay) : null
+
+  const upcomingDeadlines = await fetchDeadlineEntries(supabase, user!.id, today, { limit: 3 })
 
   const greeting = getGreeting({
     username: profile?.display_name || profile?.username || 'vos',
@@ -129,6 +140,10 @@ export default async function DashboardPage() {
           </div>
         )}
       </section>
+
+      {upcomingDeadlines.length > 0 && (
+        <DeadlineSpotlight entries={upcomingDeadlines} today={today} />
+      )}
 
       {visibleItems.length === 0 && (
         <EmptyState
@@ -198,6 +213,48 @@ export default async function DashboardPage() {
         </div>
       )}
     </div>
+  )
+}
+
+/** Módulo compacto "Vence pronto": los 3 deadlines más urgentes (vencidos
+ *  primero) con acceso directo a la agenda. No se renderiza sin deadlines. */
+function DeadlineSpotlight({
+  entries,
+  today,
+}: {
+  entries: DeadlineEntry[]
+  today: string
+}) {
+  return (
+    <section className="space-y-3">
+      <div className="flex items-center justify-between">
+        <h2 className="text-xs uppercase tracking-wider text-muted">Vence pronto</h2>
+        <Link href="/agenda" className="text-xs text-accent hover:underline">
+          Ver agenda →
+        </Link>
+      </div>
+      <ul className="rounded-xl border border-border bg-surface divide-y divide-border">
+        {entries.map((e) => (
+          <li key={`${e.entityType}-${e.id}`}>
+            <Link
+              href={e.href}
+              className="flex items-center justify-between gap-3 px-4 py-2.5 hover:bg-surface-2 transition-colors"
+            >
+              <div className="min-w-0">
+                <p className="text-sm font-medium truncate">{e.title}</p>
+                {e.contextLabel && (
+                  <p className="text-xs text-muted truncate">{e.contextLabel}</p>
+                )}
+              </div>
+              <DeadlineBadge
+                urgency={e.urgency}
+                label={formatDeadlineLabel(e.deadline, today)}
+              />
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </section>
   )
 }
 

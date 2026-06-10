@@ -88,6 +88,14 @@ export function ItemForm({ categoryOptions }: { categoryOptions: CategoryOption[
         />
       </div>
 
+      <div className="space-y-1.5">
+        <label htmlFor="deadline" className="block text-sm text-muted">
+          Fecha límite <span className="text-muted/60">(opcional)</span>
+        </label>
+        <input id="deadline" name="deadline" type="date" className={inputCls} />
+        <p className="text-xs text-muted/80">¿Para cuándo querés tenerlo terminado?</p>
+      </div>
+
       {categoryOptions.length > 0 && (
         <div className="space-y-1.5">
           <label htmlFor="category_id" className="block text-sm text-muted">

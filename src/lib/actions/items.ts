@@ -20,6 +20,7 @@ export async function createItemAction(
     source_url: formData.get('source_url') || '',
     category_id: formData.get('category_id') || '',
     scope: formData.get('scope') || 'study',
+    deadline: formData.get('deadline') || '',
   })
   if (!parsed.success) {
     return { error: parsed.error.issues[0].message }
@@ -40,6 +41,7 @@ export async function createItemAction(
     source_url: parsed.data.source_url || null,
     category_id: parsed.data.category_id || null,
     scope: parsed.data.scope,
+    deadline: parsed.data.deadline || null,
   })
 
   if (error) return { error: 'No pudimos guardar el ítem.' }
@@ -47,6 +49,7 @@ export async function createItemAction(
   revalidatePath('/biblioteca')
   revalidatePath('/categorias')
   revalidatePath('/stats')
+  revalidatePath('/agenda')
   redirect('/dashboard')
 }
 
@@ -78,6 +81,9 @@ export async function updateItemFieldsAction(
   if (parsed.data.source_url !== undefined) {
     patch.source_url = parsed.data.source_url || null
   }
+  if (parsed.data.deadline !== undefined) {
+    patch.deadline = parsed.data.deadline || null
+  }
 
   if (Object.keys(patch).length === 0) return { ok: true }
 
@@ -105,6 +111,7 @@ export async function updateItemFieldsAction(
   revalidatePath('/dashboard')
   revalidatePath('/biblioteca')
   revalidatePath('/stats')
+  revalidatePath('/agenda')
   revalidatePath(`/item/${parsed.data.id}`)
   return { ok: true }
 }
@@ -149,6 +156,7 @@ export async function updateItemStatusAction(itemId: string, status: 'active' | 
   if (error) return { error: 'update_failed' as const }
   revalidatePath('/dashboard')
   revalidatePath('/biblioteca')
+  revalidatePath('/agenda')
   revalidatePath(`/item/${itemId}`)
   return { ok: true as const }
 }

@@ -5,6 +5,8 @@ import { ProgressRing } from '@/components/progress-ring'
 import { CategoryBadge } from '@/components/category-badge'
 import { EmptyState } from '@/components/empty-state'
 import { kindLabel, unitLabel, type ItemScope } from '@/lib/items/constants'
+import { DeadlineBadge } from '@/components/deadline-badge'
+import { formatDeadlineLabel, getUrgency, todayInTimezone } from '@/lib/deadlines/utils'
 import { ProjectActions } from './project-actions'
 import { ProjectItemsManager } from './project-items-manager'
 import { RemoveItemClient } from './remove-item-client'
@@ -18,6 +20,7 @@ type ProjectRow = {
   color: string
   emoji: string | null
   status: 'active' | 'archived'
+  deadline: string | null
 }
 
 type MemberItem = {
@@ -66,10 +69,10 @@ export default async function ProyectoDetallePage({
   // Una sola pasada paralela: proyecto + ítems miembros (join PostgREST) + categorías.
   // Antes traíamos TODOS los ítems del usuario y filtrábamos en memoria. Ahora
   // solo viajan los ítems que pertenecen al proyecto, vía foreign-key embed.
-  const [{ data: project }, { data: memberRows }, { data: cats }] = await Promise.all([
+  const [{ data: project }, { data: memberRows }, { data: cats }, { data: profile }] = await Promise.all([
     supabase
       .from('projects')
-      .select('id, name, description, color, emoji, status')
+      .select('id, name, description, color, emoji, status, deadline')
       .eq('id', id)
       .eq('user_id', user!.id)
       .maybeSingle(),
@@ -85,10 +88,12 @@ export default async function ProyectoDetallePage({
       .from('categories')
       .select('id, name, color, emoji')
       .eq('user_id', user!.id),
+    supabase.from('profiles').select('timezone').eq('id', user!.id).single(),
   ])
 
   if (!project) notFound()
   const prj = project as ProjectRow
+  const today = todayInTimezone(profile?.timezone)
 
   type MemberRow = { added_at: string; item: MemberItem | null }
   const memberItems: MemberItem[] = ((memberRows ?? []) as unknown as MemberRow[])
@@ -137,9 +142,17 @@ export default async function ProyectoDetallePage({
               description: prj.description,
               color: prj.color,
               emoji: prj.emoji,
+              deadline: prj.deadline,
             }}
           />
         </div>
+        {prj.deadline && !isArchived && (
+          <DeadlineBadge
+            urgency={getUrgency(prj.deadline, today)}
+            label={formatDeadlineLabel(prj.deadline, today)}
+            size="md"
+          />
+        )}
         {prj.description && (
           <p className="text-sm text-muted">{prj.description}</p>
         )}

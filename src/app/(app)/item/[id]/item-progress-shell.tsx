@@ -12,6 +12,8 @@ import {
 } from '@/lib/items/progress'
 import { formatRelative } from '@/lib/format'
 import { setStepsWeightModeAction } from '@/lib/actions/item-weight-mode'
+import { DeadlineBadge } from '@/components/deadline-badge'
+import { formatDeadlineLabel, getUrgency } from '@/lib/deadlines/utils'
 import { StepsEditor, type Step } from './steps-editor'
 
 type ItemForShell = {
@@ -25,6 +27,7 @@ type ItemForShell = {
   source_url: string | null
   completed_at: string | null
   steps_weight_mode: StepsWeightMode
+  deadline: string | null
 }
 
 type CategoryForShell = {
@@ -45,6 +48,7 @@ export function ItemProgressShell({
   category,
   initialSteps,
   itemActions,
+  today,
 }: {
   item: ItemForShell
   category: CategoryForShell
@@ -52,6 +56,8 @@ export function ItemProgressShell({
   /** `<ItemActions itemId={...} status={...} />` y compañía — server component
    *  inyectado como children para no traerlo al cliente. */
   itemActions: ReactNode
+  /** Día actual (YYYY-MM-DD) en la timezone del perfil, calculado server-side. */
+  today: string
 }) {
   const [steps, setSteps] = useState<Step[]>(
     [...initialSteps].sort((a, b) => a.position - b.position),
@@ -100,16 +106,25 @@ export function ItemProgressShell({
                 </>
               )}
             </p>
-            {category && (
-              <div className="mt-2">
-                <Link href={`/categorias/${category.id}`}>
-                  <CategoryBadge
-                    name={category.name}
-                    color={category.color}
-                    emoji={category.emoji}
-                    size="sm"
+            {(category || (item.deadline && !isDone)) && (
+              <div className="mt-2 flex items-center gap-2 flex-wrap">
+                {item.deadline && !isDone && (
+                  <DeadlineBadge
+                    urgency={getUrgency(item.deadline, today)}
+                    label={formatDeadlineLabel(item.deadline, today)}
+                    size="md"
                   />
-                </Link>
+                )}
+                {category && (
+                  <Link href={`/categorias/${category.id}`}>
+                    <CategoryBadge
+                      name={category.name}
+                      color={category.color}
+                      emoji={category.emoji}
+                      size="sm"
+                    />
+                  </Link>
+                )}
               </div>
             )}
             {item.source_url && (
@@ -153,6 +168,7 @@ export function ItemProgressShell({
           setSteps={setSteps}
           weightMode={weightMode}
           onWeightModeChange={handleWeightModeChange}
+          today={today}
         />
         {weightModeError && (
           <p className="text-sm text-danger" role="alert">

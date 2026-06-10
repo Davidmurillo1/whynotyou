@@ -20,6 +20,7 @@ export type ItemEditable = {
   unit_type: UnitType
   total_units: number
   source_url: string | null
+  deadline: string | null
 }
 
 export function ItemDetailsEditor({ item }: { item: ItemEditable }) {
@@ -33,6 +34,7 @@ export function ItemDetailsEditor({ item }: { item: ItemEditable }) {
   const [unitType, setUnitType] = useState<UnitType>(item.unit_type)
   const [totalUnits, setTotalUnits] = useState<string>(String(item.total_units))
   const [sourceUrl, setSourceUrl] = useState<string>(item.source_url ?? '')
+  const [deadline, setDeadline] = useState<string>(item.deadline ?? '')
 
   const handleSave = () => {
     setError(null)
@@ -49,6 +51,7 @@ export function ItemDetailsEditor({ item }: { item: ItemEditable }) {
         unit_type: unitType,
         total_units: totalNum,
         source_url: sourceUrl.trim() || '',
+        deadline,
       })
       if ('error' in result) {
         setError(result.error)
@@ -65,6 +68,7 @@ export function ItemDetailsEditor({ item }: { item: ItemEditable }) {
     setUnitType(item.unit_type)
     setTotalUnits(String(item.total_units))
     setSourceUrl(item.source_url ?? '')
+    setDeadline(item.deadline ?? '')
     setError(null)
     setOpen(false)
   }
@@ -138,6 +142,30 @@ export function ItemDetailsEditor({ item }: { item: ItemEditable }) {
         <p className="text-[11px] text-muted/80">
           Si bajás este número por debajo de lo que ya avanzaste, lo recortamos automáticamente.
         </p>
+      </div>
+
+      <div className="space-y-1.5">
+        <label htmlFor="edit-deadline" className="block text-xs text-muted">
+          Fecha límite <span className="text-muted/60">(opcional)</span>
+        </label>
+        <div className="flex items-center gap-2">
+          <input
+            id="edit-deadline"
+            type="date"
+            value={deadline}
+            onChange={(e) => setDeadline(e.target.value)}
+            className={`${inputCls} flex-1`}
+          />
+          {deadline && (
+            <button
+              type="button"
+              onClick={() => setDeadline('')}
+              className="text-xs text-muted hover:text-danger shrink-0"
+            >
+              Quitar
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="space-y-1.5">

@@ -110,6 +110,7 @@ function paths() {
   revalidatePath('/proyectos')
   revalidatePath('/biblioteca')
   revalidatePath('/dashboard')
+  revalidatePath('/agenda')
 }
 
 export async function createProjectAction(
@@ -121,6 +122,7 @@ export async function createProjectAction(
     description: formData.get('description') || '',
     color: formData.get('color') || '#8b93a1',
     emoji: formData.get('emoji') || '',
+    deadline: formData.get('deadline') || '',
   })
   if (!parsed.success) return { error: parsed.error.issues[0].message }
 
@@ -138,6 +140,7 @@ export async function createProjectAction(
       description: parsed.data.description || null,
       color: parsed.data.color,
       emoji: parsed.data.emoji || null,
+      deadline: parsed.data.deadline || null,
     })
     .select('id')
     .single()
@@ -165,6 +168,9 @@ export async function updateProjectAction(input: UpdateProjectInput) {
   if (parsed.data.color !== undefined) patch.color = parsed.data.color
   if (parsed.data.emoji !== undefined) {
     patch.emoji = parsed.data.emoji || null
+  }
+  if (parsed.data.deadline !== undefined) {
+    patch.deadline = parsed.data.deadline || null
   }
 
   if (Object.keys(patch).length === 0) return { ok: true as const }

@@ -18,6 +18,7 @@ type Initial = {
   description: string | null
   color: string
   emoji: string | null
+  deadline: string | null
 }
 
 export function ProjectActions({
@@ -122,6 +123,7 @@ function EditModal({
   const [description, setDescription] = useState(initial.description ?? '')
   const [color, setColor] = useState(initial.color)
   const [emoji, setEmoji] = useState(initial.emoji ?? '')
+  const [deadline, setDeadline] = useState(initial.deadline ?? '')
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -133,6 +135,7 @@ function EditModal({
         description: description.trim() || null,
         color,
         emoji: emoji.trim() || null,
+        deadline: deadline || null,
       })
       if ('error' in res && res.error) {
         const msg =
@@ -189,6 +192,30 @@ function EditModal({
             rows={2}
             className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm focus:border-accent focus:outline-none resize-none"
           />
+        </div>
+
+        <div className="space-y-1.5">
+          <label htmlFor="edit-deadline" className="block text-sm text-muted">
+            Fecha límite <span className="text-muted/60">(opcional)</span>
+          </label>
+          <div className="flex items-center gap-2">
+            <input
+              id="edit-deadline"
+              type="date"
+              value={deadline}
+              onChange={(e) => setDeadline(e.target.value)}
+              className="flex-1 rounded-lg border border-border bg-bg px-3 py-2 text-sm focus:border-accent focus:outline-none"
+            />
+            {deadline && (
+              <button
+                type="button"
+                onClick={() => setDeadline('')}
+                className="text-xs text-muted hover:text-danger shrink-0"
+              >
+                Quitar
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="space-y-1.5">

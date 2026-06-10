@@ -3,9 +3,11 @@ import { createSupabaseServerClient } from '@/lib/supabase/server'
 import { ProgressRing } from '@/components/progress-ring'
 import { CategoryBadge } from '@/components/category-badge'
 import { ProjectBadge } from '@/components/project-badge'
+import { DeadlineBadge } from '@/components/deadline-badge'
 import { EmptyState } from '@/components/empty-state'
 import { kindLabel, statusLabel, unitLabel, type ItemScope } from '@/lib/items/constants'
 import { computeItemProgress, type StepLike, type StepsWeightMode } from '@/lib/items/progress'
+import { formatDeadlineLabel, getUrgency, todayInTimezone } from '@/lib/deadlines/utils'
 
 export const metadata = { title: 'Biblioteca · Why Not You?' }
 export const dynamic = 'force-dynamic'
@@ -21,6 +23,7 @@ type Item = {
   category_id: string | null
   scope: ItemScope
   steps_weight_mode: StepsWeightMode | null
+  deadline: string | null
 }
 
 type ItemWithProgress = Item & { progress: number }
@@ -64,7 +67,7 @@ export default async function BibliotecaPage({
 
   let itemsQuery = supabase
     .from('items')
-    .select('id, title, kind, unit_type, total_units, current_units, status, category_id, scope, steps_weight_mode, updated_at')
+    .select('id, title, kind, unit_type, total_units, current_units, status, category_id, scope, steps_weight_mode, deadline, updated_at')
     .eq('user_id', user!.id)
     .order('updated_at', { ascending: false })
 
@@ -77,6 +80,7 @@ export default async function BibliotecaPage({
     { data: cats },
     { data: memberships },
     { data: projectsRaw },
+    { data: profile },
   ] = await Promise.all([
     itemsQuery,
     supabase
@@ -93,8 +97,10 @@ export default async function BibliotecaPage({
       .eq('user_id', user!.id)
       .order('order_index', { ascending: true })
       .order('created_at', { ascending: false }),
+    supabase.from('profiles').select('timezone').eq('id', user!.id).single(),
   ])
 
+  const today = todayInTimezone(profile?.timezone)
   const list = (items ?? []) as Item[]
   const catMap = new Map((cats ?? []).map((c) => [c.id, c]))
   const projectMap = new Map(
@@ -286,6 +292,7 @@ export default async function BibliotecaPage({
                     catMap={catMap}
                     itemProjects={itemProjects}
                     projectMap={projectMap}
+                    today={today}
                   />
                 ))}
               </ul>
@@ -349,17 +356,22 @@ function ItemRow({
   catMap,
   itemProjects,
   projectMap,
+  today,
 }: {
   item: ItemWithProgress
   catMap: Map<string, CatMapEntry>
   itemProjects: Map<string, string[]>
   projectMap: Map<string, ProjectMapEntry>
+  today: string
 }) {
   const pct = item.progress
   const cat = item.category_id ? catMap.get(item.category_id) : null
   const projectIds = itemProjects.get(item.id) ?? []
   const firstProject = projectIds[0] ? projectMap.get(projectIds[0]) : null
   const extraProjects = projectIds.length - 1
+  // El badge de fecha solo tiene sentido mientras el ítem siga en juego.
+  const finalized = item.status === 'done' || item.status === 'abandoned' || pct >= 1
+  const showDeadline = Boolean(item.deadline) && !finalized
 
   return (
     <li>
@@ -390,6 +402,12 @@ function ItemRow({
                 }
                 color={firstProject.color}
                 emoji={firstProject.emoji}
+              />
+            )}
+            {showDeadline && item.deadline && (
+              <DeadlineBadge
+                urgency={getUrgency(item.deadline, today)}
+                label={formatDeadlineLabel(item.deadline, today)}
               />
             )}
           </div>

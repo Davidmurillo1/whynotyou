@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { PROJECT_DEFAULT_COLOR } from './constants'
+import { deadlineField, deadlineFieldNullable } from '@/lib/deadlines/schemas'
 
 export const createProjectSchema = z.object({
   name: z
@@ -23,6 +24,7 @@ export const createProjectSchema = z.object({
     .max(8, 'El emoji es demasiado largo')
     .optional()
     .or(z.literal('')),
+  deadline: deadlineField,
 })
 
 export const updateProjectSchema = z.object({
@@ -49,6 +51,7 @@ export const updateProjectSchema = z.object({
     .max(8, 'El emoji es demasiado largo')
     .nullable()
     .optional(),
+  deadline: deadlineFieldNullable,
 })
 
 export const setItemProjectsSchema = z.object({

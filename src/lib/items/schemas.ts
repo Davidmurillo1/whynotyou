@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { deadlineField } from '@/lib/deadlines/schemas'
 
 export const createItemSchema = z.object({
   title: z.string().trim().min(1, 'El título no puede estar vacío').max(200),
@@ -8,6 +9,7 @@ export const createItemSchema = z.object({
   source_url: z.string().url('URL inválida').optional().or(z.literal('')),
   category_id: z.string().uuid().optional().or(z.literal('')),
   scope: z.enum(['study', 'work']).default('study'),
+  deadline: deadlineField,
 })
 
 export type CreateItemInput = z.infer<typeof createItemSchema>
@@ -42,5 +44,6 @@ export const updateItemFieldsSchema = z.object({
   unit_type: z.enum(['pages', 'videos', 'modules', 'chapters', 'hours', 'percent']).optional(),
   total_units: z.coerce.number().positive('Tiene que ser mayor que cero').max(100000).optional(),
   source_url: z.string().url('URL inválida').optional().or(z.literal('')),
+  deadline: deadlineField,
 })
 export type UpdateItemFieldsInput = z.infer<typeof updateItemFieldsSchema>

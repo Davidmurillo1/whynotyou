@@ -8,6 +8,7 @@ import {
   type UnitType,
 } from '@/lib/items/constants'
 import { formatDuration, formatRelative } from '@/lib/format'
+import { todayInTimezone } from '@/lib/deadlines/utils'
 import { ItemActions } from './item-actions'
 import { ItemCategoryEditor } from './item-category-editor'
 import { ItemScopeEditor } from './item-scope-editor'
@@ -35,11 +36,12 @@ export default async function ItemDetailPage({
     { data: cats },
     { data: stepsRaw },
     { data: itemProjectRows },
+    { data: profile },
   ] = await Promise.all([
     supabase
       .from('items')
       .select(
-        'id, title, kind, unit_type, total_units, current_units, status, source_url, started_at, completed_at, category_id, scope, steps_weight_mode',
+        'id, title, kind, unit_type, total_units, current_units, status, source_url, started_at, completed_at, category_id, scope, steps_weight_mode, deadline',
       )
       .eq('id', id)
       .eq('user_id', user!.id)
@@ -57,7 +59,7 @@ export default async function ItemDetailPage({
       .order('order_index', { ascending: true }),
     supabase
       .from('item_steps')
-      .select('id, name, weight_pct, position, is_done, parent_step_id, progress_mode')
+      .select('id, name, weight_pct, position, is_done, parent_step_id, progress_mode, deadline')
       .eq('item_id', id)
       .eq('user_id', user!.id)
       .order('position', { ascending: true }),
@@ -68,6 +70,7 @@ export default async function ItemDetailPage({
       .select('project:projects!inner(id, name, color, emoji, status)')
       .eq('item_id', id)
       .eq('user_id', user!.id),
+    supabase.from('profiles').select('timezone').eq('id', user!.id).single(),
   ])
 
   if (!item) notFound()
@@ -82,8 +85,10 @@ export default async function ItemDetailPage({
     is_done: Boolean(s.is_done),
     parent_step_id: (s.parent_step_id as string | null) ?? null,
     progress_mode: ((s.progress_mode as 'weighted' | 'count' | null) ?? 'weighted'),
+    deadline: (s.deadline as string | null) ?? null,
   }))
 
+  const today = todayInTimezone(profile?.timezone)
   const hasSteps = steps.length > 0
   const currentCat = item.category_id ? (cats ?? []).find((c) => c.id === item.category_id) : null
   const scope: ItemScope = (item.scope as ItemScope) ?? 'study'
@@ -118,7 +123,9 @@ export default async function ItemDetailPage({
           completed_at: item.completed_at ?? null,
           steps_weight_mode:
             (item.steps_weight_mode as 'equal' | 'custom' | null) ?? 'equal',
+          deadline: (item.deadline as string | null) ?? null,
         }}
+        today={today}
         category={
           currentCat
             ? { id: currentCat.id, name: currentCat.name, color: currentCat.color, emoji: currentCat.emoji }
@@ -145,6 +152,7 @@ export default async function ItemDetailPage({
             unit_type: item.unit_type as UnitType,
             total_units: Number(item.total_units),
             source_url: item.source_url ?? null,
+            deadline: (item.deadline as string | null) ?? null,
           }}
         />
       </section>

@@ -19,6 +19,7 @@ export type StepRow = {
   is_done: boolean
   parent_step_id: string | null
   progress_mode: ProgressMode
+  deadline: string | null
 }
 
 export type StepActionResult =
@@ -52,6 +53,7 @@ function revalidateItem(itemId: string) {
   revalidatePath('/dashboard')
   revalidatePath('/biblioteca')
   revalidatePath('/stats')
+  revalidatePath('/agenda')
 }
 
 /** Crea un nuevo paso. Si no llega `position`, lo agrega al final del nivel
@@ -140,7 +142,7 @@ export async function createStepAction(input: {
   const { data: inserted, error } = await supabase
     .from('item_steps')
     .insert(insertPayload)
-    .select('id, name, weight_pct, position, is_done, parent_step_id, progress_mode')
+    .select('id, name, weight_pct, position, is_done, parent_step_id, progress_mode, deadline')
     .single()
   if (error || !inserted) return { error: mapPgError(error ?? { message: 'insert_failed' }) }
 
@@ -155,11 +157,12 @@ export async function createStepAction(input: {
       is_done: Boolean(inserted.is_done),
       parent_step_id: (inserted.parent_step_id as string | null) ?? null,
       progress_mode: ((inserted.progress_mode as ProgressMode | null) ?? 'weighted'),
+      deadline: (inserted.deadline as string | null) ?? null,
     },
   }
 }
 
-/** Edita parcialmente un paso (nombre, peso, posición, is_done). */
+/** Edita parcialmente un paso (nombre, peso, posición, is_done, fecha límite). */
 export async function updateStepAction(input: {
   id: string
   name?: string
@@ -167,6 +170,7 @@ export async function updateStepAction(input: {
   position?: number
   is_done?: boolean
   progress_mode?: ProgressMode
+  deadline?: string | null
 }): Promise<StepActionResult> {
   const parsed = updateStepSchema.safeParse(input)
   if (!parsed.success) return { error: parsed.error.issues[0].message }
@@ -196,6 +200,9 @@ export async function updateStepAction(input: {
   }
   if (parsed.data.progress_mode !== undefined) {
     patch.progress_mode = parsed.data.progress_mode
+  }
+  if (parsed.data.deadline !== undefined) {
+    patch.deadline = parsed.data.deadline || null
   }
 
   if (Object.keys(patch).length === 0) return { ok: true }

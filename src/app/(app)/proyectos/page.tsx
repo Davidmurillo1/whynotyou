@@ -2,6 +2,8 @@ import Link from 'next/link'
 import { createSupabaseServerClient } from '@/lib/supabase/server'
 import { ProgressRing } from '@/components/progress-ring'
 import { EmptyState } from '@/components/empty-state'
+import { DeadlineBadge } from '@/components/deadline-badge'
+import { formatDeadlineLabel, getUrgency, todayInTimezone } from '@/lib/deadlines/utils'
 
 export const metadata = { title: 'Proyectos · Why Not You?' }
 export const dynamic = 'force-dynamic'
@@ -14,6 +16,7 @@ type Project = {
   emoji: string | null
   status: 'active' | 'archived'
   order_index: number
+  deadline: string | null
 }
 
 export default async function ProyectosPage() {
@@ -25,10 +28,10 @@ export default async function ProyectosPage() {
   // Una sola pasada paralela. Para los progresos, hacemos foreign-key embed
   // (`items!inner`) y solo viajan los ítems que pertenecen a algún proyecto —
   // antes traíamos todos los del usuario y filtrábamos en memoria.
-  const [{ data: projects }, { data: memberships }] = await Promise.all([
+  const [{ data: projects }, { data: memberships }, { data: profile }] = await Promise.all([
     supabase
       .from('projects')
-      .select('id, name, description, color, emoji, status, order_index, created_at')
+      .select('id, name, description, color, emoji, status, order_index, deadline, created_at')
       .eq('user_id', user!.id)
       .order('status', { ascending: true })
       .order('order_index', { ascending: true })
@@ -37,7 +40,10 @@ export default async function ProyectosPage() {
       .from('project_items')
       .select('project_id, item:items!inner(current_units, total_units)')
       .eq('user_id', user!.id),
+    supabase.from('profiles').select('timezone').eq('id', user!.id).single(),
   ])
+
+  const today = todayInTimezone(profile?.timezone)
 
   const list = (projects ?? []) as Project[]
 
@@ -99,10 +105,10 @@ export default async function ProyectosPage() {
       ) : (
         <>
           {actives.length > 0 && (
-            <Section title="Activos" projects={actives} progressFor={progressFor} />
+            <Section title="Activos" projects={actives} progressFor={progressFor} today={today} />
           )}
           {archived.length > 0 && (
-            <Section title="Archivados" projects={archived} progressFor={progressFor} muted />
+            <Section title="Archivados" projects={archived} progressFor={progressFor} today={today} muted />
           )}
         </>
       )}
@@ -114,11 +120,13 @@ function Section({
   title,
   projects,
   progressFor,
+  today,
   muted,
 }: {
   title: string
   projects: Project[]
   progressFor: (id: string) => { pct: number; count: number }
+  today: string
   muted?: boolean
 }) {
   return (
@@ -148,10 +156,18 @@ function Section({
                     {p.emoji && <span aria-hidden>{p.emoji}</span>}
                     <p className="font-medium truncate">{p.name}</p>
                   </div>
-                  <p className="text-xs text-muted mt-1">
-                    {count} {count === 1 ? 'ítem' : 'ítems'}
-                    {p.description && <> · {p.description}</>}
-                  </p>
+                  <div className="flex items-center gap-2 mt-1 flex-wrap">
+                    <p className="text-xs text-muted">
+                      {count} {count === 1 ? 'ítem' : 'ítems'}
+                      {p.description && <> · {p.description}</>}
+                    </p>
+                    {p.deadline && p.status === 'active' && (
+                      <DeadlineBadge
+                        urgency={getUrgency(p.deadline, today)}
+                        label={formatDeadlineLabel(p.deadline, today)}
+                      />
+                    )}
+                  </div>
                 </div>
                 <span className="tabular text-sm text-muted shrink-0">
                   {Math.round(pct * 100)}%

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useTransition } from 'react'
+import { CalendarPlus } from 'lucide-react'
 import {
   createStepAction,
   updateStepAction,
@@ -15,6 +16,8 @@ import {
   type ProgressMode,
   type StepsWeightMode,
 } from '@/lib/items/progress'
+import { DeadlineBadge } from '@/components/deadline-badge'
+import { formatDeadlineLabel, getUrgency } from '@/lib/deadlines/utils'
 
 export type Step = {
   id: string
@@ -24,6 +27,7 @@ export type Step = {
   is_done: boolean
   parent_step_id: string | null
   progress_mode: ProgressMode
+  deadline: string | null
 }
 
 /** Tolerancia para considerar la suma "= 100" frente a errores de redondeo
@@ -49,12 +53,15 @@ export function StepsEditor({
   setSteps,
   weightMode,
   onWeightModeChange,
+  today,
 }: {
   itemId: string
   steps: Step[]
   setSteps: React.Dispatch<React.SetStateAction<Step[]>>
   weightMode: StepsWeightMode
   onWeightModeChange: (mode: StepsWeightMode) => void
+  /** Día actual (YYYY-MM-DD) en la timezone del perfil, calculado server-side. */
+  today: string
 }) {
   const [pending, startTransition] = useTransition()
   const [error, setError] = useState<string | null>(null)
@@ -214,6 +221,20 @@ export function StepsEditor({
     })
   }
 
+  const handleDeadline = (step: Step, deadline: string | null) => {
+    if (deadline === step.deadline) return
+    setError(null)
+    const prev = step.deadline
+    setSteps((p) => p.map((s) => (s.id === step.id ? { ...s, deadline } : s)))
+    startTransition(async () => {
+      const result = await updateStepAction({ id: step.id, deadline })
+      if ('error' in result) {
+        setError(result.error)
+        setSteps((p) => p.map((s) => (s.id === step.id ? { ...s, deadline: prev } : s)))
+      }
+    })
+  }
+
   return (
     <div className="space-y-4">
       {roots.length > 0 && (
@@ -274,12 +295,14 @@ export function StepsEditor({
               isLast={idx === roots.length - 1}
               pending={pending}
               weightMode={weightMode}
+              today={today}
               onToggle={handleToggle}
               onDelete={handleDelete}
               onMove={handleMoveRoot}
               onRename={handleRename}
               onWeight={handleWeight}
               onProgressMode={handleProgressMode}
+              onDeadline={handleDeadline}
               itemId={itemId}
               startTransition={startTransition}
               setError={setError}
@@ -324,6 +347,70 @@ function formatWeight(n: number): string {
   return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2).replace(/0$/, '')
 }
 
+/** Control de fecha límite por paso. Sin fecha: ícono de calendario que abre
+ *  el picker nativo (input date invisible encima). Con fecha: chip de urgencia
+ *  clickeable para cambiarla + botón para quitarla. Oculto en pasos completados. */
+function StepDeadlineControl({
+  step,
+  today,
+  pending,
+  onDeadline,
+}: {
+  step: Step
+  today: string
+  pending: boolean
+  onDeadline: (s: Step, deadline: string | null) => void
+}) {
+  const pickerInput = (
+    <input
+      type="date"
+      value={step.deadline ?? ''}
+      disabled={pending}
+      onChange={(e) => onDeadline(step, e.target.value || null)}
+      className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-default"
+      aria-label={
+        step.deadline
+          ? `Cambiar fecha límite de "${step.name}"`
+          : `Asignar fecha límite a "${step.name}"`
+      }
+    />
+  )
+
+  if (step.deadline) {
+    return (
+      <span className="inline-flex items-center gap-0.5 shrink-0">
+        <span className="relative inline-flex" title="Cambiar fecha límite">
+          <DeadlineBadge
+            urgency={getUrgency(step.deadline, today)}
+            label={formatDeadlineLabel(step.deadline, today)}
+          />
+          {pickerInput}
+        </span>
+        <button
+          type="button"
+          onClick={() => onDeadline(step, null)}
+          disabled={pending}
+          aria-label={`Quitar fecha límite de "${step.name}"`}
+          title="Quitar fecha"
+          className="text-muted hover:text-danger px-0.5 text-xs disabled:opacity-50"
+        >
+          ×
+        </button>
+      </span>
+    )
+  }
+
+  return (
+    <span
+      className="relative inline-flex shrink-0 p-1 text-muted/60 hover:text-text transition-colors"
+      title="Asignar fecha límite"
+    >
+      <CalendarPlus className="h-3.5 w-3.5" aria-hidden />
+      {pickerInput}
+    </span>
+  )
+}
+
 function ModuleRow({
   module,
   tasks,
@@ -332,12 +419,14 @@ function ModuleRow({
   isLast,
   pending,
   weightMode,
+  today,
   onToggle,
   onDelete,
   onMove,
   onRename,
   onWeight,
   onProgressMode,
+  onDeadline,
   itemId,
   startTransition,
   setError,
@@ -350,12 +439,14 @@ function ModuleRow({
   isLast: boolean
   pending: boolean
   weightMode: StepsWeightMode
+  today: string
   onToggle: (s: Step) => void
   onDelete: (s: Step) => void
   onMove: (s: Step, dir: -1 | 1) => void
   onRename: (s: Step, name: string) => void
   onWeight: (s: Step, weight: number) => void
   onProgressMode: (s: Step, mode: ProgressMode) => void
+  onDeadline: (s: Step, deadline: string | null) => void
   itemId: string
   startTransition: (cb: () => void) => void
   setError: (e: string | null) => void
@@ -387,6 +478,14 @@ function ModuleRow({
             onBlur={(e) => onRename(module, e.target.value)}
             className={`${inputCls} flex-1 min-w-0 ${effectivelyDone ? 'line-through text-muted' : ''}`}
           />
+          {!effectivelyDone && (
+            <StepDeadlineControl
+              step={module}
+              today={today}
+              pending={pending}
+              onDeadline={onDeadline}
+            />
+          )}
           {weightMode === 'custom' && (
             <div className="flex items-center gap-1 shrink-0">
               <input
@@ -481,6 +580,14 @@ function ModuleRow({
                 onBlur={(e) => onRename(task, e.target.value)}
                 className={`${inputCls} flex-1 min-w-0 py-1 text-xs ${task.is_done ? 'line-through text-muted' : ''}`}
               />
+              {!task.is_done && (
+                <StepDeadlineControl
+                  step={task}
+                  today={today}
+                  pending={pending}
+                  onDeadline={onDeadline}
+                />
+              )}
               {module.progress_mode === 'weighted' && (
                 <div className="flex items-center gap-0.5 shrink-0">
                   <input
