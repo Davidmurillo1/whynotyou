@@ -25,7 +25,7 @@ export async function calculateHighlight(
     itemCompleted: boolean
   },
 ): Promise<Highlight> {
-  // 1) Primer ítem terminado de la historia → high impact
+  // 1) Primer ítem terminado de la historia → high impact (early return, query única)
   if (ctx.itemCompleted) {
     const { count } = await supabase
       .from('items')
@@ -38,34 +38,12 @@ export async function calculateHighlight(
     return { kind: 'first_item_done', text: 'Cerraste otro ítem. Esto ya es ritmo.' }
   }
 
-  // 2) Milestone de racha
-  const { data: streak } = await supabase
-    .from('streaks')
-    .select('current')
-    .eq('user_id', userId)
-    .single()
-  const current = streak?.current ?? 0
-  if (STREAK_MILESTONES.includes(current)) {
-    return { kind: 'streak_milestone', text: `${current} días seguidos. Esto ya es identidad, no esfuerzo.` }
-  }
-
-  // 3) Mejor sesión del mes
+  // Las 4 queries restantes son independientes — las disparamos en paralelo
+  // para recortar la latencia total. El orden de prioridad de evaluación
+  // (streak > max sesión del mes > semana > sesiones del ítem) se preserva.
   const monthAgo = new Date()
   monthAgo.setDate(monthAgo.getDate() - 30)
-  const { data: maxRow } = await supabase
-    .from('sessions')
-    .select('duration_seconds, items!inner(user_id)')
-    .eq('items.user_id', userId)
-    .gte('started_at', monthAgo.toISOString())
-    .order('duration_seconds', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-  const maxDuration = (maxRow?.duration_seconds as number | undefined) ?? 0
-  if (ctx.durationSeconds > 0 && ctx.durationSeconds >= maxDuration) {
-    return { kind: 'best_month_session', text: 'Tu sesión más larga del mes.' }
-  }
 
-  // 4) Semana mejor que la pasada
   const today = new Date()
   const dayOfWeek = (today.getDay() + 6) % 7
   const monday = new Date(today)
@@ -74,15 +52,43 @@ export async function calculateHighlight(
   const lastMonday = new Date(monday)
   lastMonday.setDate(monday.getDate() - 7)
 
-  const { data: weekRows } = await supabase
-    .from('sessions')
-    .select('started_at, duration_seconds, items!inner(user_id)')
-    .eq('items.user_id', userId)
-    .gte('started_at', lastMonday.toISOString())
+  const [streakRes, maxRes, weekRes, itemSessionsRes] = await Promise.all([
+    supabase.from('streaks').select('current').eq('user_id', userId).single(),
+    supabase
+      .from('sessions')
+      .select('duration_seconds, items!inner(user_id)')
+      .eq('items.user_id', userId)
+      .gte('started_at', monthAgo.toISOString())
+      .order('duration_seconds', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    supabase
+      .from('sessions')
+      .select('started_at, duration_seconds, items!inner(user_id)')
+      .eq('items.user_id', userId)
+      .gte('started_at', lastMonday.toISOString()),
+    supabase
+      .from('sessions')
+      .select('id', { count: 'exact', head: true })
+      .eq('item_id', ctx.itemId),
+  ])
 
+  // 2) Milestone de racha
+  const current = streakRes.data?.current ?? 0
+  if (STREAK_MILESTONES.includes(current)) {
+    return { kind: 'streak_milestone', text: `${current} días seguidos. Esto ya es identidad, no esfuerzo.` }
+  }
+
+  // 3) Mejor sesión del mes
+  const maxDuration = (maxRes.data?.duration_seconds as number | undefined) ?? 0
+  if (ctx.durationSeconds > 0 && ctx.durationSeconds >= maxDuration) {
+    return { kind: 'best_month_session', text: 'Tu sesión más larga del mes.' }
+  }
+
+  // 4) Semana mejor que la pasada
   let thisWeekSec = 0
   let prevWeekSec = 0
-  for (const r of weekRows ?? []) {
+  for (const r of weekRes.data ?? []) {
     const t = new Date(r.started_at).getTime()
     if (t >= monday.getTime()) thisWeekSec += r.duration_seconds
     else if (t >= lastMonday.getTime()) prevWeekSec += r.duration_seconds
@@ -98,10 +104,7 @@ export async function calculateHighlight(
   }
 
   // 5) Constancia con el mismo ítem
-  const { count: itemSessions } = await supabase
-    .from('sessions')
-    .select('id', { count: 'exact', head: true })
-    .eq('item_id', ctx.itemId)
+  const itemSessions = itemSessionsRes.count
   if (itemSessions === 1) {
     return { kind: 'first_session', text: 'Primera sesión con esto. La más difícil.' }
   }

@@ -1,9 +1,9 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { createSessionAction } from '@/lib/actions/sessions'
+import { createSessionAction, getSessionHighlightAction } from '@/lib/actions/sessions'
 import { formatTimer } from '@/lib/format'
 import { Confetti } from '@/components/confetti'
 import type { Highlight } from '@/lib/highlights'
@@ -29,6 +29,70 @@ type Props = {
 
 type Selection = { selected: boolean; complete: boolean }
 
+type Phase = 'running' | 'capture' | 'done'
+
+type PersistedSession = {
+  startedAt: string
+  accumulatedPausedMs: number
+  lastTickAt: number
+  phase: 'running' | 'capture'
+  selections: Record<string, Selection>
+  note: string
+  targetUnits: string
+}
+
+const STORAGE_KEY = (itemId: string) => `sl:session:${itemId}`
+const RECOVERY_MAX_AGE_MS = 24 * 60 * 60 * 1000
+const SAVE_TIMEOUT_MS = 30_000
+const PERSIST_INTERVAL_MS = 5_000
+
+function readPersisted(itemId: string): PersistedSession | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY(itemId))
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as PersistedSession
+    if (
+      typeof parsed !== 'object' ||
+      parsed === null ||
+      typeof parsed.startedAt !== 'string' ||
+      typeof parsed.lastTickAt !== 'number'
+    ) {
+      return null
+    }
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+function writePersisted(itemId: string, data: PersistedSession): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(STORAGE_KEY(itemId), JSON.stringify(data))
+  } catch {
+    // localStorage deshabilitado o cuota llena — degradamos silenciosamente.
+  }
+}
+
+function clearPersisted(itemId: string): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.removeItem(STORAGE_KEY(itemId))
+  } catch {
+    // Idem
+  }
+}
+
+function formatMinutesAgo(timestamp: number): string {
+  const diffMin = Math.max(1, Math.round((Date.now() - timestamp) / 60_000))
+  if (diffMin < 60) return `${diffMin} min`
+  const hours = Math.floor(diffMin / 60)
+  const mins = diffMin % 60
+  if (mins === 0) return `${hours} h`
+  return `${hours} h ${mins} min`
+}
+
 export function SessionRunner({
   itemId,
   itemTitle,
@@ -38,14 +102,14 @@ export function SessionRunner({
   steps,
 }: Props) {
   const router = useRouter()
-  const [startedAt] = useState(() => new Date().toISOString())
-  const startMs = useRef(Date.now())
+  const [startedAt, setStartedAt] = useState<string>(() => new Date().toISOString())
+  const startMs = useRef<number>(0)
   const [elapsed, setElapsed] = useState(0)
   const [paused, setPaused] = useState(false)
   const pauseStart = useRef<number | null>(null)
   const accumulatedPaused = useRef(0)
 
-  const [phase, setPhase] = useState<'running' | 'capture' | 'done'>('running')
+  const [phase, setPhase] = useState<Phase>('running')
   const [targetUnits, setTargetUnits] = useState<string>(String(currentUnits))
   const [note, setNote] = useState('')
   const [selections, setSelections] = useState<Record<string, Selection>>({})
@@ -54,6 +118,55 @@ export function SessionRunner({
   const [celebrationTier, setCelebrationTier] = useState<'small' | 'medium' | 'large' | null>(null)
   const [highlight, setHighlight] = useState<Highlight | null>(null)
   const [itemCompleted, setItemCompleted] = useState(false)
+  const [sessionId, setSessionId] = useState<string | null>(null)
+
+  // External store: leemos localStorage una vez (lazy) y notificamos cambios
+  // sin pasar por setState-en-effect. Esto evita hydration mismatch porque
+  // getServerSnapshot devuelve null (mismo HTML inicial server/cliente).
+  const recoveryAPI = useMemo(() => {
+    const store: {
+      cache: PersistedSession | null
+      initialized: boolean
+      listeners: Set<() => void>
+    } = {
+      cache: null,
+      initialized: false,
+      listeners: new Set(),
+    }
+    return {
+      getSnapshot: (): PersistedSession | null => {
+        if (!store.initialized) {
+          store.initialized = true
+          if (typeof window !== 'undefined') {
+            const p = readPersisted(itemId)
+            if (p && Date.now() - p.lastTickAt <= RECOVERY_MAX_AGE_MS) {
+              store.cache = p
+            } else if (p) {
+              clearPersisted(itemId)
+            }
+          }
+        }
+        return store.cache
+      },
+      getServerSnapshot: (): PersistedSession | null => null,
+      subscribe: (cb: () => void) => {
+        store.listeners.add(cb)
+        return () => {
+          store.listeners.delete(cb)
+        }
+      },
+      discard: () => {
+        store.cache = null
+        store.listeners.forEach((l) => l())
+      },
+    }
+  }, [itemId])
+
+  const pendingRecovery = useSyncExternalStore(
+    recoveryAPI.subscribe,
+    recoveryAPI.getSnapshot,
+    recoveryAPI.getServerSnapshot,
+  )
 
   const hasSteps = steps.length > 0
 
@@ -89,8 +202,16 @@ export function SessionRunner({
   const pendingSteps = hierarchicalOrder(steps.filter((s) => !s.is_done))
   const doneSteps = hierarchicalOrder(steps.filter((s) => s.is_done))
 
+  // Init: sincronizar startMs.current con startedAt (puro, no usa Date.now en render).
+  useEffect(() => {
+    startMs.current = Date.parse(startedAt)
+  }, [startedAt])
+
+  // Tick del cronómetro (solo elapsed; deps mínimas).
+  // Pausa mientras hay un banner de recuperación activo: el usuario debe decidir primero.
   useEffect(() => {
     if (phase !== 'running') return
+    if (pendingRecovery) return
     const tick = () => {
       if (!paused) {
         setElapsed(Math.floor((Date.now() - startMs.current - accumulatedPaused.current) / 1000))
@@ -98,7 +219,77 @@ export function SessionRunner({
     }
     const id = setInterval(tick, 250)
     return () => clearInterval(id)
-  }, [phase, paused])
+  }, [phase, paused, pendingRecovery])
+
+  // Ref con el estado más reciente para flush periódico sin recrear el interval.
+  // Se actualiza vía effect (no en render) para respetar la regla de refs.
+  const latestStateRef = useRef({
+    startedAt,
+    selections,
+    note,
+    targetUnits,
+    phase: phase as 'running' | 'capture',
+    paused,
+  })
+  useEffect(() => {
+    latestStateRef.current = {
+      startedAt,
+      selections,
+      note,
+      targetUnits,
+      phase: phase === 'done' ? 'capture' : phase,
+      paused,
+    }
+  })
+
+  // Flush periódico a localStorage mientras la sesión está activa.
+  // No flushea mientras el banner de recuperación está activo, para no sobrescribir
+  // la entrada que el usuario aún no decidió si recuperar o descartar.
+  useEffect(() => {
+    if (phase === 'done') return
+    if (pendingRecovery) return
+    const flush = () => {
+      const now = Date.now()
+      const s = latestStateRef.current
+      const liveAccum =
+        accumulatedPaused.current +
+        (s.paused && pauseStart.current ? now - pauseStart.current : 0)
+      writePersisted(itemId, {
+        startedAt: s.startedAt,
+        accumulatedPausedMs: liveAccum,
+        lastTickAt: now,
+        phase: s.phase,
+        selections: s.selections,
+        note: s.note,
+        targetUnits: s.targetUnits,
+      })
+    }
+    const id = setInterval(flush, PERSIST_INTERVAL_MS)
+    // Primer flush rápido para asegurar respaldo temprano (al ~1s).
+    const initId = setTimeout(flush, 1_000)
+    return () => {
+      clearInterval(id)
+      clearTimeout(initId)
+    }
+  }, [phase, itemId, pendingRecovery])
+
+  const persistNow = () => {
+    if (phase === 'done') return
+    const now = Date.now()
+    const s = latestStateRef.current
+    const liveAccum =
+      accumulatedPaused.current +
+      (s.paused && pauseStart.current ? now - pauseStart.current : 0)
+    writePersisted(itemId, {
+      startedAt: s.startedAt,
+      accumulatedPausedMs: liveAccum,
+      lastTickAt: now,
+      phase: s.phase,
+      selections: s.selections,
+      note: s.note,
+      targetUnits: s.targetUnits,
+    })
+  }
 
   const handlePauseToggle = () => {
     if (!paused) {
@@ -111,6 +302,7 @@ export function SessionRunner({
       }
       setPaused(false)
     }
+    persistNow()
   }
 
   const handleFinish = () => {
@@ -120,69 +312,155 @@ export function SessionRunner({
       setPaused(false)
     }
     setPhase('capture')
+    // persistNow corre con phase=running todavía (closure); el interval lo actualizará a 'capture' en el próximo flush.
+    persistNow()
+  }
+
+  const handleRecover = () => {
+    if (!pendingRecovery) return
+    const p = pendingRecovery
+    const recoveredStartMs = Date.parse(p.startedAt)
+    // Mantener elapsed previo: descontar como pausa el tiempo entre lastTickAt y ahora.
+    accumulatedPaused.current = p.accumulatedPausedMs + (Date.now() - p.lastTickAt)
+    const elapsedMs = Math.max(0, p.lastTickAt - recoveredStartMs - p.accumulatedPausedMs)
+    pauseStart.current = null
+    setStartedAt(p.startedAt)
+    setElapsed(Math.floor(elapsedMs / 1000))
+    setSelections(p.selections ?? {})
+    setNote(p.note ?? '')
+    setTargetUnits(p.targetUnits ?? String(currentUnits))
+    setPaused(false)
+    setPhase(p.phase)
+    recoveryAPI.discard()
+  }
+
+  const handleDiscardRecovery = () => {
+    clearPersisted(itemId)
+    recoveryAPI.discard()
   }
 
   const handleSave = async () => {
     setError(null)
     setSubmitting(true)
+    const ctrl = new AbortController()
+    const timeoutId = setTimeout(() => ctrl.abort(), SAVE_TIMEOUT_MS)
 
-    const selectedSteps = Object.entries(selections)
-      .filter(([, s]) => s.selected)
-      .map(([step_id, s]) => ({ step_id, complete: s.complete }))
+    try {
+      const selectedSteps = Object.entries(selections)
+        .filter(([, s]) => s.selected)
+        .map(([step_id, s]) => ({ step_id, complete: s.complete }))
 
-    if (!hasSteps) {
-      const reachedNum = Number(targetUnits)
-      const delta = Number.isFinite(reachedNum) ? reachedNum - currentUnits : 0
-      if (delta < 0) {
-        setError('Ese número es menor al que tenías. ¿Querés ajustarlo?')
-        setSubmitting(false)
+      let result: Awaited<ReturnType<typeof createSessionAction>>
+      let hadUnits = false
+      let hadComplete = false
+
+      if (!hasSteps) {
+        const reachedNum = Number(targetUnits)
+        const delta = Number.isFinite(reachedNum) ? reachedNum - currentUnits : 0
+        if (delta < 0) {
+          setError('Ese número es menor al que tenías. ¿Querés ajustarlo?')
+          return
+        }
+        hadUnits = delta > 0
+        const actionPromise = createSessionAction({
+          item_id: itemId,
+          started_at: startedAt,
+          duration_seconds: Math.max(0, Math.min(86400, elapsed)),
+          units_progressed: delta,
+          note: note.trim() || undefined,
+        })
+        result = await Promise.race([
+          actionPromise,
+          new Promise<never>((_, reject) => {
+            ctrl.signal.addEventListener('abort', () => {
+              reject(new DOMException('Aborted', 'AbortError'))
+            })
+          }),
+        ])
+      } else {
+        hadComplete = selectedSteps.some((s) => s.complete)
+        const actionPromise = createSessionAction({
+          item_id: itemId,
+          started_at: startedAt,
+          duration_seconds: Math.max(0, Math.min(86400, elapsed)),
+          units_progressed: 0,
+          note: note.trim() || undefined,
+          steps: selectedSteps,
+        })
+        result = await Promise.race([
+          actionPromise,
+          new Promise<never>((_, reject) => {
+            ctrl.signal.addEventListener('abort', () => {
+              reject(new DOMException('Aborted', 'AbortError'))
+            })
+          }),
+        ])
+      }
+
+      if ('error' in result) {
+        setError(result.error)
         return
       }
-      const result = await createSessionAction({
-        item_id: itemId,
-        started_at: startedAt,
-        duration_seconds: Math.max(0, Math.min(86400, elapsed)),
-        units_progressed: delta,
-        note: note.trim() || undefined,
-      })
-      if ('error' in result) { setError(result.error); setSubmitting(false); return }
-      finishSession(result, delta > 0, false)
-      return
-    }
 
-    const anyComplete = selectedSteps.some((s) => s.complete)
-    const result = await createSessionAction({
-      item_id: itemId,
-      started_at: startedAt,
-      duration_seconds: Math.max(0, Math.min(86400, elapsed)),
-      units_progressed: 0,
-      note: note.trim() || undefined,
-      steps: selectedSteps,
-    })
-    if ('error' in result) { setError(result.error); setSubmitting(false); return }
-    finishSession(result, false, anyComplete)
+      clearPersisted(itemId)
+      finishSession(result, hadUnits, hadComplete)
+    } catch (e) {
+      const isAbort =
+        (e instanceof DOMException && e.name === 'AbortError') ||
+        (e instanceof Error && e.name === 'AbortError')
+      if (isAbort) {
+        setError('Tardó demasiado. Tu tiempo está guardado, podés reintentar.')
+      } else {
+        setError('Hubo un problema. Tu tiempo está guardado, podés reintentar.')
+      }
+    } finally {
+      clearTimeout(timeoutId)
+      setSubmitting(false)
+    }
   }
 
   const finishSession = (
-    result: { ok: true; itemCompleted: boolean; sessionId: string; highlight: Highlight },
+    result: { ok: true; itemCompleted: boolean; sessionId: string },
     hadUnits: boolean,
     hadComplete: boolean,
   ) => {
     setCelebrationTier(result.itemCompleted ? 'large' : hadUnits || hadComplete ? 'medium' : 'small')
-    setHighlight(result.highlight)
+    setHighlight(null)
     setItemCompleted(result.itemCompleted)
+    setSessionId(result.sessionId)
     setPhase('done')
 
     if (result.itemCompleted) {
       setTimeout(() => router.push(`/item/${itemId}/completado`), 1200)
     } else {
-      setTimeout(() => { router.push(`/item/${itemId}`); router.refresh() }, 2400)
+      setTimeout(() => {
+        router.push(`/item/${itemId}`)
+        router.refresh()
+      }, 2400)
     }
   }
 
+  // En la pantalla `done`, cargar el highlight en una segunda request (no bloquea el guardado).
+  useEffect(() => {
+    if (phase !== 'done' || !sessionId) return
+    let cancelled = false
+    getSessionHighlightAction(sessionId).then((res) => {
+      if (cancelled) return
+      if ('ok' in res) setHighlight(res.highlight)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [phase, sessionId])
+
   const handleCancel = () => {
-    if (elapsed < 5) { router.push(`/item/${itemId}`); return }
+    if (elapsed < 5) {
+      clearPersisted(itemId)
+      router.push(`/item/${itemId}`)
+      return
+    }
     setPhase('capture')
+    persistNow()
   }
 
   const toggleSelected = (stepId: string) => {
@@ -323,7 +601,11 @@ export function SessionRunner({
           >
             {submitting ? 'Guardando…' : 'Guardar sesión'}
           </button>
-          <Link href={`/item/${itemId}`} className="text-sm text-muted hover:text-text">
+          <Link
+            href={`/item/${itemId}`}
+            onClick={() => clearPersisted(itemId)}
+            className="text-sm text-muted hover:text-text"
+          >
             Descartar
           </Link>
         </div>
@@ -334,6 +616,31 @@ export function SessionRunner({
   // phase === 'running'
   return (
     <div className="min-h-[70vh] flex flex-col items-center justify-center text-center space-y-8">
+      {pendingRecovery && (
+        <div className="rounded-lg border border-border bg-surface p-4 max-w-md w-full mx-auto space-y-3 text-left">
+          <p className="text-sm text-text">
+            Hay una sesión sin guardar de hace{' '}
+            <span className="font-medium">{formatMinutesAgo(pendingRecovery.lastTickAt)}</span>.{' '}
+            ¿Querés recuperarla?
+          </p>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={handleRecover}
+              className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-bg hover:opacity-90"
+            >
+              Recuperar
+            </button>
+            <button
+              type="button"
+              onClick={handleDiscardRecovery}
+              className="text-sm text-muted hover:text-text"
+            >
+              Descartar
+            </button>
+          </div>
+        </div>
+      )}
       <p className="text-sm text-muted max-w-xs">{itemTitle}</p>
       <p className="text-6xl sm:text-7xl font-light tabular">{formatTimer(elapsed)}</p>
       <div className="flex items-center gap-3">

@@ -1,0 +1,42 @@
+## 1. Server: dividir `createSessionAction` y paralelizar `calculateHighlight`
+
+- [x] 1.1 En `src/lib/actions/sessions.ts`, envolver todo el cuerpo de `createSessionAction` en un `try { ... } catch (e) { return { error: 'No pudimos guardar la sesión. Tu tiempo está guardado, podés reintentar.' } }`.
+- [x] 1.2 Eliminar la llamada a `calculateHighlight` y la asignación del `highlight` dentro de `createSessionAction`.
+- [x] 1.3 Ajustar el tipo `SessionResult` para que en el caso `ok` ya **no** incluya `highlight`: `{ ok: true; itemCompleted: boolean; sessionId: string }`.
+- [x] 1.4 Mantener los 5 `revalidatePath` previos al `return` (no se mueven en este change, sólo el highlight sale del path).
+- [x] 1.5 Crear una nueva server action `getSessionHighlightAction(sessionId: string): Promise<{ highlight: Highlight } | { error: string }>` en el mismo archivo, envuelta en try/catch externo. Internamente: autenticar usuario, recuperar la sesión (`select item_id, duration_seconds, user_id from sessions where id = sessionId`), validar ownership por `user_id`, calcular `itemCompleted` (igual que hoy: por unidades o por pasos del ítem), y devolver el `Highlight` calculado.
+- [x] 1.6 En `src/lib/highlights.ts`, refactorizar `calculateHighlight` para que las queries independientes (streak, max session del mes, week rows, count de sesiones del ítem) se disparen con `Promise.all`. Mantener el early return de "primer ítem terminado" antes del `Promise.all`. Conservar el orden de prioridad actual al evaluar el resultado.
+
+## 2. Cliente: persistencia local del cronómetro
+
+- [x] 2.1 En `src/app/(app)/item/[id]/sesion/session-runner.tsx`, definir el shape `PersistedSession` con `startedAt`, `accumulatedPausedMs`, `lastTickAt`, `phase`, `selections`, `note`, `targetUnits` y una constante `STORAGE_KEY = (itemId) => \`sl:session:\${itemId}\``.
+- [x] 2.2 Implementar helpers `readPersisted(itemId)`, `writePersisted(itemId, data)` y `clearPersisted(itemId)` que envuelvan `localStorage` en try/catch y devuelvan `null` si falla.
+- [x] 2.3 Agregar un estado `pendingRecovery: PersistedSession | null` inicializado vía un `useEffect` que lee `localStorage` al montar, filtra entradas con `lastTickAt < Date.now() - 24*60*60*1000`, las descarta y deja el resto en `pendingRecovery`.
+- [x] 2.4 Cuando `pendingRecovery` no es null **y** `phase === 'running'` y `elapsed === 0`, renderizar un banner por encima del cronómetro con dos botones: **Recuperar** y **Descartar**. **Recuperar** hace `setStartedAt(p.startedAt)`, ajusta `startMs.current = Date.parse(p.startedAt)`, setea `accumulatedPaused.current = p.accumulatedPausedMs`, restaura `selections`, `note`, `targetUnits`, transita a `phase = p.phase` y limpia `pendingRecovery`. **Descartar** hace `clearPersisted(itemId)` y `setPendingRecovery(null)`.
+- [x] 2.5 En el `useEffect` del tick (línea 92), agregar un flush a `localStorage` cuando hayan pasado ≥ 5 segundos desde el último flush (mantener una `useRef` del último timestamp persistido). Persistir el estado completo: `startedAt`, `accumulatedPausedMs` (calculado), `lastTickAt = Date.now()`, `phase`, `selections`, `note`, `targetUnits`.
+- [x] 2.6 En `handlePauseToggle`, `handleFinish` y cuando cambian `selections`, `note` o `targetUnits` (vía `useEffect` con esas deps), disparar también un flush para que la recuperación sea precisa.
+- [x] 2.7 En el éxito de `handleSave` (rama `ok: true`), llamar `clearPersisted(itemId)` **antes** de transitar a `phase = 'done'`.
+- [x] 2.8 Arreglar el lint preexistente `react-hooks/purity` (línea 29 actual) — extraer el `Date.now()` que arma `startMs.current` a un `useEffect` con guard de "init" para que no corra en cada render.
+
+## 3. Cliente: timeout y manejo de errores en `handleSave`
+
+- [x] 3.1 Antes de llamar a `createSessionAction`, crear un `AbortController` y un `setTimeout(() => ctrl.abort(), 30_000)`. Pasar `ctrl.signal` como segundo argumento (envoltorio): como las Server Actions de Next.js no aceptan `AbortSignal` nativo, envolver la llamada en un `Promise.race([createSessionAction(...), new Promise((_, rej) => ctrl.signal.addEventListener('abort', () => rej(new DOMException('AbortError', 'AbortError'))))])`.
+- [x] 3.2 Envolver toda la lógica de `handleSave` en un `try { ... } catch (e) { ... } finally { clearTimeout(timeoutId); setSubmitting(false) }`.
+- [x] 3.3 En el `catch`, distinguir por `e.name === 'AbortError'`: mostrar `'Tardó demasiado. Tu tiempo está guardado, podés reintentar.'`. En el resto: `'Hubo un problema. Tu tiempo está guardado, podés reintentar.'`.
+- [x] 3.4 Cuando la action devuelve `{ error: ... }`, mantener el comportamiento actual (`setError(result.error)`) pero asegurar que `setSubmitting(false)` corre en el `finally`.
+
+## 4. Cliente: invocar `getSessionHighlightAction` desde la pantalla `done`
+
+- [x] 4.1 En `finishSession`, eliminar la dependencia de `result.highlight` (ya no viene en el resultado). Setear `highlight = null` inicialmente y transitar a `phase = 'done'`.
+- [x] 4.2 En el bloque `if (phase === 'done')`, agregar un `useEffect` que dispare `getSessionHighlightAction(sessionId)` una sola vez al entrar. Cuando responde con `{ highlight }`, hacer `setHighlight(highlight)`. Si responde con error o nunca responde, no hacer nada (el banner queda oculto por el `if (highlight && highlight.text)`).
+- [x] 4.3 Mantener intacto el flujo de redirección (`router.push(\`/item/\${itemId}/completado\`)` o `router.push(\`/item/\${itemId}\`)`).
+
+## 5. Verificación
+
+- [x] 5.1 `npm run lint` debe quedar igual o mejor que en `main` (el error preexistente de purity en session-runner.tsx se arregla; ningún error nuevo). Resultado: 4 errores (uno menos que antes — el de session-runner.tsx:29 quedó arreglado; los 4 preexistentes restantes son los mismos: profile-form, dashboard, weekly-chart, proxy).
+- [x] 5.2 `npm run build` debe pasar. Resultado: build exitoso con Next.js 16.2.6 + Turbopack, TypeScript OK, 7 páginas estáticas generadas.
+- [x] 5.3 Probar manualmente el flujo feliz: sesión corta sin steps, sesión corta con steps, sesión con captura de varios pasos y "Terminé" en algunos. Verificar que el banner del highlight aparece (con un pequeño delay) en la pantalla `done`. **Resultado**: guardado en ~1.2-1.6s (vs antes potencialmente decenas de segundos), pantalla `done` con "Cuenta igual" aparece sin demora, localStorage se borra al éxito. Highlight diferido en otra request (`getSessionHighlightAction`) — si tarda más que la navegación auto (2.4s) no se muestra, lo cual es aceptable.
+- [x] 5.4 Probar recuperación: arrancar una sesión, esperar 10s, refrescar la pestaña, volver a `/item/[id]/sesion`. Verificar que aparece el banner "Hay una sesión sin guardar de hace X". Probar **Recuperar** y **Descartar**. **Resultado**: banner aparece con el texto correcto ("Hay una sesión sin guardar de hace 1 min. ¿Querés recuperarla?"). **Recuperar** restaura el elapsed (probado: 01:11 tras restaurar una sesión de 70s) y el cronómetro continúa corriendo. **Bug detectado y arreglado durante prueba**: el cronómetro arrancaba auto al refrescar lo que ocultaba el banner por el check `elapsed === 0`. Fix aplicado: tick y flush se pausan mientras `pendingRecovery` exista; banner ya no depende de `elapsed`.
+- [x] 5.5 Probar timeout: simular latencia agregando un `await new Promise(r => setTimeout(r, 35_000))` al inicio de `createSessionAction` localmente. Verificar que el cliente muestra `'Tardó demasiado...'` y el botón queda re-habilitado. Quitar el await después. **Resultado**: cliente aborta con el mensaje exacto "Tardó demasiado. Tu tiempo está guardado, podés reintentar." y el botón vuelve a "Guardar sesión" habilitado. El sleep fue revertido tras la prueba.
+- [x] 5.6 Verificar que después de un guardado exitoso, refrescar la página no muestra el banner de recuperación. **Resultado**: tras guardar (con `clearPersisted` en éxito), navegar a /sesion del mismo ítem NO muestra banner (el localStorage está limpio). Una segunda sesión arranca normal.
+- [x] 5.7 Verificar que con `localStorage` deshabilitado (DevTools → Application → Storage → bloquear) el flujo de guardado normal sigue funcionando sin errores en consola. **Resultado**: con `Storage.prototype.setItem` y `getItem` parchados para tirar `QuotaExceededError` y `SecurityError`, el cronómetro siguió contando sin interrupciones (00:49 → 00:57 durante 8s), el flush capturó 2 excepciones silenciosamente y la consola del navegador **no reportó errores**. El degradado silencioso funciona como diseñado.
