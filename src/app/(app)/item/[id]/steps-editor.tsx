@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useTransition } from 'react'
-import { CalendarPlus } from 'lucide-react'
+import { CalendarPlus, Timer } from 'lucide-react'
 import {
   createStepAction,
   updateStepAction,
@@ -18,6 +18,8 @@ import {
 } from '@/lib/items/progress'
 import { DeadlineBadge } from '@/components/deadline-badge'
 import { formatDeadlineLabel, getUrgency } from '@/lib/deadlines/utils'
+import { EstimatedTimeInput } from '@/components/estimated-time-input'
+import { formatEstimate } from '@/lib/efficiency/format'
 
 export type Step = {
   id: string
@@ -28,6 +30,7 @@ export type Step = {
   parent_step_id: string | null
   progress_mode: ProgressMode
   deadline: string | null
+  estimated_minutes: number | null
 }
 
 /** Tolerancia para considerar la suma "= 100" frente a errores de redondeo
@@ -235,6 +238,22 @@ export function StepsEditor({
     })
   }
 
+  const handleEstimate = (step: Step, minutes: number | null) => {
+    if (minutes === step.estimated_minutes) return
+    setError(null)
+    const prev = step.estimated_minutes
+    setSteps((p) => p.map((s) => (s.id === step.id ? { ...s, estimated_minutes: minutes } : s)))
+    startTransition(async () => {
+      const result = await updateStepAction({ id: step.id, estimated_minutes: minutes })
+      if ('error' in result) {
+        setError(result.error)
+        setSteps((p) =>
+          p.map((s) => (s.id === step.id ? { ...s, estimated_minutes: prev } : s)),
+        )
+      }
+    })
+  }
+
   return (
     <div className="space-y-4">
       {roots.length > 0 && (
@@ -303,6 +322,7 @@ export function StepsEditor({
               onWeight={handleWeight}
               onProgressMode={handleProgressMode}
               onDeadline={handleDeadline}
+              onEstimate={handleEstimate}
               itemId={itemId}
               startTransition={startTransition}
               setError={setError}
@@ -411,6 +431,98 @@ function StepDeadlineControl({
   )
 }
 
+/** Control de tiempo estimado por paso. Sin estimación: ícono de cronómetro
+ *  que abre el editor inline (h/min). Con estimación: chip con el valor,
+ *  clickeable para cambiarla + botón para quitarla. */
+function StepEstimateControl({
+  step,
+  pending,
+  compact,
+  onEstimate,
+}: {
+  step: Step
+  pending: boolean
+  compact?: boolean
+  onEstimate: (s: Step, minutes: number | null) => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState<number | null>(step.estimated_minutes)
+
+  if (editing) {
+    return (
+      <span className="inline-flex items-center gap-1 shrink-0">
+        <EstimatedTimeInput compact defaultMinutes={step.estimated_minutes} onChange={setDraft} />
+        <button
+          type="button"
+          onClick={() => {
+            onEstimate(step, draft)
+            setEditing(false)
+          }}
+          disabled={pending}
+          aria-label={`Guardar estimación de "${step.name}"`}
+          className="text-xs rounded bg-accent px-1.5 py-0.5 text-bg hover:opacity-90 disabled:opacity-50"
+        >
+          ✓
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setDraft(step.estimated_minutes)
+            setEditing(false)
+          }}
+          aria-label="Cancelar edición de estimación"
+          className="text-xs text-muted hover:text-text px-0.5"
+        >
+          ×
+        </button>
+      </span>
+    )
+  }
+
+  if (step.estimated_minutes != null) {
+    return (
+      <span className="inline-flex items-center gap-0.5 shrink-0">
+        <button
+          type="button"
+          onClick={() => setEditing(true)}
+          disabled={pending}
+          title="Cambiar tiempo estimado"
+          aria-label={`Cambiar tiempo estimado de "${step.name}"`}
+          className={`inline-flex items-center gap-1 rounded-full border border-border bg-surface-2 px-2 py-0.5 text-muted hover:text-text disabled:opacity-50 ${
+            compact ? 'text-[10px]' : 'text-[11px]'
+          }`}
+        >
+          <Timer className="h-3 w-3" aria-hidden />
+          <span className="tabular">{formatEstimate(step.estimated_minutes)}</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => onEstimate(step, null)}
+          disabled={pending}
+          aria-label={`Quitar tiempo estimado de "${step.name}"`}
+          title="Quitar estimación"
+          className="text-muted hover:text-danger px-0.5 text-xs disabled:opacity-50"
+        >
+          ×
+        </button>
+      </span>
+    )
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => setEditing(true)}
+      disabled={pending}
+      title="Estimar tiempo"
+      aria-label={`Estimar tiempo de "${step.name}"`}
+      className="inline-flex shrink-0 p-1 text-muted/60 hover:text-text transition-colors disabled:opacity-50"
+    >
+      <Timer className="h-3.5 w-3.5" aria-hidden />
+    </button>
+  )
+}
+
 function ModuleRow({
   module,
   tasks,
@@ -427,6 +539,7 @@ function ModuleRow({
   onWeight,
   onProgressMode,
   onDeadline,
+  onEstimate,
   itemId,
   startTransition,
   setError,
@@ -447,6 +560,7 @@ function ModuleRow({
   onWeight: (s: Step, weight: number) => void
   onProgressMode: (s: Step, mode: ProgressMode) => void
   onDeadline: (s: Step, deadline: string | null) => void
+  onEstimate: (s: Step, minutes: number | null) => void
   itemId: string
   startTransition: (cb: () => void) => void
   setError: (e: string | null) => void
@@ -486,6 +600,7 @@ function ModuleRow({
               onDeadline={onDeadline}
             />
           )}
+          <StepEstimateControl step={module} pending={pending} onEstimate={onEstimate} />
           {weightMode === 'custom' && (
             <div className="flex items-center gap-1 shrink-0">
               <input
@@ -588,6 +703,12 @@ function ModuleRow({
                   onDeadline={onDeadline}
                 />
               )}
+              <StepEstimateControl
+                step={task}
+                pending={pending}
+                compact
+                onEstimate={onEstimate}
+              />
               {module.progress_mode === 'weighted' && (
                 <div className="flex items-center gap-0.5 shrink-0">
                   <input

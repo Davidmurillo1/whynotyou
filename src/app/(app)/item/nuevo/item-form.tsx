@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useActionState, useState } from 'react'
 import { createItemAction, type ItemActionState } from '@/lib/actions/items'
 import { ITEM_KIND_OPTIONS, UNIT_TYPE_OPTIONS, ITEM_SCOPE_OPTIONS, type ItemScope } from '@/lib/items/constants'
+import { EstimatedTimeInput } from '@/components/estimated-time-input'
 
 const inputCls =
   'w-full rounded-lg border border-border bg-surface px-3 py-2.5 text-text placeholder:text-muted/60 focus:border-accent focus:outline-none'
@@ -95,6 +96,8 @@ export function ItemForm({ categoryOptions }: { categoryOptions: CategoryOption[
         <input id="deadline" name="deadline" type="date" className={inputCls} />
         <p className="text-xs text-muted/80">¿Para cuándo querés tenerlo terminado?</p>
       </div>
+
+      <EstimatedTimeInput hint="¿Cuánto tiempo pensás que te va a llevar? Después medimos tu eficiencia." />
 
       {categoryOptions.length > 0 && (
         <div className="space-y-1.5">

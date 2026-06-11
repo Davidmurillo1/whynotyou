@@ -12,6 +12,7 @@ import {
   PROJECT_COLORS,
   PROJECT_SUGGESTED_EMOJIS,
 } from '@/lib/projects/constants'
+import { EstimatedTimeInput } from '@/components/estimated-time-input'
 
 type Initial = {
   name: string
@@ -19,6 +20,7 @@ type Initial = {
   color: string
   emoji: string | null
   deadline: string | null
+  estimated_minutes: number | null
 }
 
 export function ProjectActions({
@@ -124,6 +126,10 @@ function EditModal({
   const [color, setColor] = useState(initial.color)
   const [emoji, setEmoji] = useState(initial.emoji ?? '')
   const [deadline, setDeadline] = useState(initial.deadline ?? '')
+  const [estimatedMinutes, setEstimatedMinutes] = useState<number | null>(
+    initial.estimated_minutes,
+  )
+  const [estimateKey, setEstimateKey] = useState(0)
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -136,6 +142,7 @@ function EditModal({
         color,
         emoji: emoji.trim() || null,
         deadline: deadline || null,
+        estimated_minutes: estimatedMinutes ?? '',
       })
       if ('error' in res && res.error) {
         const msg =
@@ -216,6 +223,35 @@ function EditModal({
               </button>
             )}
           </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <span className="block text-sm text-muted">
+            Tiempo estimado <span className="text-muted/60">(opcional)</span>
+          </span>
+          <div className="flex items-center gap-2">
+            <EstimatedTimeInput
+              key={estimateKey}
+              compact
+              defaultMinutes={estimatedMinutes}
+              onChange={setEstimatedMinutes}
+            />
+            {estimatedMinutes != null && (
+              <button
+                type="button"
+                onClick={() => {
+                  setEstimatedMinutes(null)
+                  setEstimateKey((k) => k + 1)
+                }}
+                className="text-xs text-muted hover:text-danger shrink-0"
+              >
+                Quitar
+              </button>
+            )}
+          </div>
+          <p className="text-[11px] text-muted/80">
+            Si lo dejás vacío, lo derivamos sumando las estimaciones de los ítems.
+          </p>
         </div>
 
         <div className="space-y-1.5">

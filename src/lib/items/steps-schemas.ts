@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { deadlineFieldNullable } from '@/lib/deadlines/schemas'
+import { estimatedMinutesField, estimatedMinutesFieldNullable } from '@/lib/efficiency/schemas'
 
 /** Modo de cálculo del progreso de un módulo (paso con hijos):
  *  - 'weighted': suma ponderada por `weight_pct` de cada tarea (default).
@@ -46,6 +47,7 @@ export const createStepSchema = z.object({
   position: z.coerce.number().int().min(0).optional(),
   parent_step_id: z.string().uuid().optional(),
   progress_mode: progressModeEnum.optional(),
+  estimated_minutes: estimatedMinutesField,
 })
 export type CreateStepInput = z.infer<typeof createStepSchema>
 
@@ -58,6 +60,7 @@ export const updateStepSchema = z.object({
   is_done: z.coerce.boolean().optional(),
   progress_mode: progressModeEnum.optional(),
   deadline: deadlineFieldNullable,
+  estimated_minutes: estimatedMinutesFieldNullable,
 })
 export type UpdateStepInput = z.infer<typeof updateStepSchema>
 

@@ -9,6 +9,7 @@ import {
   type ItemKind,
   type UnitType,
 } from '@/lib/items/constants'
+import { EstimatedTimeInput } from '@/components/estimated-time-input'
 
 const inputCls =
   'w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-text placeholder:text-muted/60 focus:border-accent focus:outline-none'
@@ -21,6 +22,7 @@ export type ItemEditable = {
   total_units: number
   source_url: string | null
   deadline: string | null
+  estimated_minutes: number | null
 }
 
 export function ItemDetailsEditor({ item }: { item: ItemEditable }) {
@@ -35,6 +37,9 @@ export function ItemDetailsEditor({ item }: { item: ItemEditable }) {
   const [totalUnits, setTotalUnits] = useState<string>(String(item.total_units))
   const [sourceUrl, setSourceUrl] = useState<string>(item.source_url ?? '')
   const [deadline, setDeadline] = useState<string>(item.deadline ?? '')
+  const [estimatedMinutes, setEstimatedMinutes] = useState<number | null>(item.estimated_minutes)
+  // Bump para remontar el input de estimación cuando se quita o se cancela.
+  const [estimateKey, setEstimateKey] = useState(0)
 
   const handleSave = () => {
     setError(null)
@@ -52,6 +57,7 @@ export function ItemDetailsEditor({ item }: { item: ItemEditable }) {
         total_units: totalNum,
         source_url: sourceUrl.trim() || '',
         deadline,
+        estimated_minutes: estimatedMinutes ?? '',
       })
       if ('error' in result) {
         setError(result.error)
@@ -69,6 +75,8 @@ export function ItemDetailsEditor({ item }: { item: ItemEditable }) {
     setTotalUnits(String(item.total_units))
     setSourceUrl(item.source_url ?? '')
     setDeadline(item.deadline ?? '')
+    setEstimatedMinutes(item.estimated_minutes)
+    setEstimateKey((k) => k + 1)
     setError(null)
     setOpen(false)
   }
@@ -166,6 +174,35 @@ export function ItemDetailsEditor({ item }: { item: ItemEditable }) {
             </button>
           )}
         </div>
+      </div>
+
+      <div className="space-y-1.5">
+        <span className="block text-xs text-muted">
+          Tiempo estimado <span className="text-muted/60">(opcional)</span>
+        </span>
+        <div className="flex items-center gap-2">
+          <EstimatedTimeInput
+            key={estimateKey}
+            compact
+            defaultMinutes={estimatedMinutes}
+            onChange={setEstimatedMinutes}
+          />
+          {estimatedMinutes != null && (
+            <button
+              type="button"
+              onClick={() => {
+                setEstimatedMinutes(null)
+                setEstimateKey((k) => k + 1)
+              }}
+              className="text-xs text-muted hover:text-danger shrink-0"
+            >
+              Quitar
+            </button>
+          )}
+        </div>
+        <p className="text-[11px] text-muted/80">
+          Lo comparamos contra tu tiempo real para medir tu eficiencia.
+        </p>
       </div>
 
       <div className="space-y-1.5">

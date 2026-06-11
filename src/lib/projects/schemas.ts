@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { PROJECT_DEFAULT_COLOR } from './constants'
 import { deadlineField, deadlineFieldNullable } from '@/lib/deadlines/schemas'
+import { estimatedMinutesField, estimatedMinutesFieldNullable } from '@/lib/efficiency/schemas'
 
 export const createProjectSchema = z.object({
   name: z
@@ -25,6 +26,7 @@ export const createProjectSchema = z.object({
     .optional()
     .or(z.literal('')),
   deadline: deadlineField,
+  estimated_minutes: estimatedMinutesField,
 })
 
 export const updateProjectSchema = z.object({
@@ -52,6 +54,7 @@ export const updateProjectSchema = z.object({
     .nullable()
     .optional(),
   deadline: deadlineFieldNullable,
+  estimated_minutes: estimatedMinutesFieldNullable,
 })
 
 export const setItemProjectsSchema = z.object({

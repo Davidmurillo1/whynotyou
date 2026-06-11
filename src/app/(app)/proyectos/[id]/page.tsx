@@ -7,8 +7,17 @@ import { EmptyState } from '@/components/empty-state'
 import { kindLabel, unitLabel, type ItemScope } from '@/lib/items/constants'
 import { DeadlineBadge } from '@/components/deadline-badge'
 import { formatDeadlineLabel, getUrgency, todayInTimezone } from '@/lib/deadlines/utils'
+import { computeItemProgress } from '@/lib/items/progress'
+import {
+  computeEfficiency,
+  effectiveItemEstimate,
+  effectiveProjectEstimate,
+  type EffectiveEstimate,
+  type EstimateStepLike,
+} from '@/lib/efficiency/compute'
 import { ProjectActions } from './project-actions'
 import { ProjectItemsManager } from './project-items-manager'
+import { ProjectEfficiencySection, type MemberEfficiency } from './project-efficiency-section'
 import { RemoveItemClient } from './remove-item-client'
 
 export const dynamic = 'force-dynamic'
@@ -21,6 +30,7 @@ type ProjectRow = {
   emoji: string | null
   status: 'active' | 'archived'
   deadline: string | null
+  estimated_minutes: number | null
 }
 
 type MemberItem = {
@@ -33,6 +43,8 @@ type MemberItem = {
   status: string
   category_id: string | null
   scope: ItemScope
+  steps_weight_mode: 'equal' | 'custom' | null
+  estimated_minutes: number | null
 }
 
 export async function generateMetadata({
@@ -72,14 +84,14 @@ export default async function ProyectoDetallePage({
   const [{ data: project }, { data: memberRows }, { data: cats }, { data: profile }] = await Promise.all([
     supabase
       .from('projects')
-      .select('id, name, description, color, emoji, status, deadline')
+      .select('id, name, description, color, emoji, status, deadline, estimated_minutes')
       .eq('id', id)
       .eq('user_id', user!.id)
       .maybeSingle(),
     supabase
       .from('project_items')
       .select(
-        'added_at, item:items!inner(id, title, kind, unit_type, total_units, current_units, status, category_id, scope)',
+        'added_at, item:items!inner(id, title, kind, unit_type, total_units, current_units, status, category_id, scope, steps_weight_mode, estimated_minutes)',
       )
       .eq('project_id', id)
       .eq('user_id', user!.id)
@@ -100,6 +112,127 @@ export default async function ProyectoDetallePage({
     .map((r) => r.item)
     .filter((i): i is MemberItem => i !== null)
   const catMap = new Map((cats ?? []).map((c) => [c.id, c]))
+
+  // --- Eficiencia del proyecto: estimado vs. real -------------------------
+  // Segunda pasada one-shot con los ids de los miembros: pasos (para
+  // estimaciones derivadas y progreso real) y sesiones (tiempo invertido).
+  const memberIds = memberItems.map((i) => i.id)
+  const [{ data: memberStepsRaw }, { data: memberSessions }] =
+    memberIds.length > 0
+      ? await Promise.all([
+          supabase
+            .from('item_steps')
+            .select(
+              'id, item_id, weight_pct, is_done, parent_step_id, progress_mode, estimated_minutes',
+            )
+            .eq('user_id', user!.id)
+            .in('item_id', memberIds),
+          supabase
+            .from('sessions')
+            .select('item_id, duration_seconds')
+            .in('item_id', memberIds),
+        ])
+      : [{ data: [] }, { data: [] }]
+
+  const stepsByItem = new Map<string, EstimateStepLike[]>()
+  for (const s of memberStepsRaw ?? []) {
+    const step: EstimateStepLike = {
+      id: s.id as string,
+      weight_pct: Number(s.weight_pct),
+      is_done: Boolean(s.is_done),
+      parent_step_id: (s.parent_step_id as string | null) ?? null,
+      progress_mode: ((s.progress_mode as 'weighted' | 'count' | null) ?? 'weighted'),
+      estimated_minutes: s.estimated_minutes != null ? Number(s.estimated_minutes) : null,
+    }
+    const list = stepsByItem.get(s.item_id as string)
+    if (list) list.push(step)
+    else stepsByItem.set(s.item_id as string, [step])
+  }
+  const secondsByItem = new Map<string, number>()
+  for (const s of memberSessions ?? []) {
+    secondsByItem.set(
+      s.item_id as string,
+      (secondsByItem.get(s.item_id as string) ?? 0) + Number(s.duration_seconds ?? 0),
+    )
+  }
+
+  type MemberCalc = {
+    item: MemberItem
+    estimate: EffectiveEstimate | null
+    progress: number
+    actualSeconds: number
+  }
+  const memberCalcs: MemberCalc[] = memberItems.map((item) => {
+    const itemSteps = stepsByItem.get(item.id) ?? []
+    return {
+      item,
+      estimate: effectiveItemEstimate(
+        { estimated_minutes: item.estimated_minutes },
+        itemSteps,
+      ),
+      progress: computeItemProgress(
+        {
+          current_units: Number(item.current_units),
+          total_units: Number(item.total_units),
+          steps_weight_mode: item.steps_weight_mode ?? 'equal',
+        },
+        itemSteps,
+      ),
+      actualSeconds: secondsByItem.get(item.id) ?? 0,
+    }
+  })
+
+  const estimatedMembers = memberCalcs.filter(
+    (m): m is MemberCalc & { estimate: EffectiveEstimate } => m.estimate != null,
+  )
+  const projectEstimate = effectiveProjectEstimate(
+    { estimated_minutes: prj.estimated_minutes },
+    memberCalcs.map((m) => m.estimate),
+  )
+
+  // Agregado: solo cuentan los miembros que tienen estimación *y* tiempo real
+  // registrado (al menos una sesión). El índice compara las horas ya invertidas
+  // contra las horas estimadas de esos ítems; los miembros sin estimación y los
+  // que aún no arrancaron se listan aparte para no inflar ni desinflar la métrica.
+  const participatingMembers = estimatedMembers.filter((m) => m.actualSeconds > 0)
+  let projectEfficiency = null
+  if (projectEstimate && participatingMembers.length > 0) {
+    const sumEstimates = participatingMembers.reduce((a, m) => a + m.estimate.minutes, 0)
+    const earnedMin = participatingMembers.reduce(
+      (a, m) => a + m.progress * m.estimate.minutes,
+      0,
+    )
+    const actualSeconds = participatingMembers.reduce((a, m) => a + m.actualSeconds, 0)
+    const progress = sumEstimates > 0 ? earnedMin / sumEstimates : 0
+    const completed =
+      participatingMembers.length === estimatedMembers.length &&
+      participatingMembers.every((m) => m.item.status === 'done')
+    projectEfficiency = computeEfficiency({
+      // Bullet y status comparan tiempo invertido contra la estimación de los
+      // ítems que ya arrancaron (no contra el total del proyecto), para no
+      // mostrar "vas adelantado" solo porque todavía faltan ítems sin tocar.
+      progress: Math.min(1, progress),
+      estimateMinutes: sumEstimates,
+      actualSeconds,
+      completed,
+    })
+  }
+
+  const memberEfficiencies: MemberEfficiency[] = estimatedMembers.map((m) => ({
+    id: m.item.id,
+    title: m.item.title,
+    estimate: m.estimate,
+    efficiency: computeEfficiency({
+      progress: m.progress,
+      estimateMinutes: m.estimate.minutes,
+      actualSeconds: m.actualSeconds,
+      completed: m.item.status === 'done',
+    }),
+  }))
+  const unestimatedMembers = memberCalcs
+    .filter((m) => m.estimate == null)
+    .map((m) => ({ id: m.item.id, title: m.item.title }))
+  // ------------------------------------------------------------------------
 
   const sumCurrent = memberItems.reduce((acc, i) => acc + Number(i.current_units), 0)
   const sumTotal = memberItems.reduce((acc, i) => acc + Number(i.total_units), 0)
@@ -143,6 +276,8 @@ export default async function ProyectoDetallePage({
               color: prj.color,
               emoji: prj.emoji,
               deadline: prj.deadline,
+              estimated_minutes:
+                prj.estimated_minutes != null ? Number(prj.estimated_minutes) : null,
             }}
           />
         </div>
@@ -175,6 +310,13 @@ export default async function ProyectoDetallePage({
           </div>
         </div>
       </section>
+
+      <ProjectEfficiencySection
+        estimate={projectEstimate}
+        efficiency={projectEfficiency}
+        members={memberEfficiencies}
+        unestimated={unestimatedMembers}
+      />
 
       {/* El picker de candidatos se carga lazy cuando el usuario abre el modal,
           así no transferimos todos los ítems del usuario en cada render. */}

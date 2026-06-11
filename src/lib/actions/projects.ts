@@ -123,6 +123,7 @@ export async function createProjectAction(
     color: formData.get('color') || '#8b93a1',
     emoji: formData.get('emoji') || '',
     deadline: formData.get('deadline') || '',
+    estimated_minutes: formData.get('estimated_minutes') || '',
   })
   if (!parsed.success) return { error: parsed.error.issues[0].message }
 
@@ -141,6 +142,7 @@ export async function createProjectAction(
       color: parsed.data.color,
       emoji: parsed.data.emoji || null,
       deadline: parsed.data.deadline || null,
+      estimated_minutes: parsed.data.estimated_minutes || null,
     })
     .select('id')
     .single()
@@ -171,6 +173,9 @@ export async function updateProjectAction(input: UpdateProjectInput) {
   }
   if (parsed.data.deadline !== undefined) {
     patch.deadline = parsed.data.deadline || null
+  }
+  if (parsed.data.estimated_minutes !== undefined) {
+    patch.estimated_minutes = parsed.data.estimated_minutes || null
   }
 
   if (Object.keys(patch).length === 0) return { ok: true as const }

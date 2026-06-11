@@ -9,12 +9,22 @@ import {
 } from '@/lib/items/constants'
 import { formatDuration, formatRelative } from '@/lib/format'
 import { todayInTimezone } from '@/lib/deadlines/utils'
+import { computeItemProgress, isStepEffectivelyDone } from '@/lib/items/progress'
+import {
+  attributeSessionTimeToSteps,
+  computeEfficiency,
+  computeStepProgress,
+  effectiveItemEstimate,
+  effectiveStepEstimate,
+  stepActualSeconds,
+} from '@/lib/efficiency/compute'
 import { ItemActions } from './item-actions'
 import { ItemCategoryEditor } from './item-category-editor'
 import { ItemScopeEditor } from './item-scope-editor'
 import { ItemDetailsEditor } from './item-details-editor'
 import { ItemProgressShell } from './item-progress-shell'
 import { ItemProjectsEditor } from './item-projects-editor'
+import { ItemEfficiencySection, type ModuleEfficiency } from './item-efficiency-section'
 import { type Step } from './steps-editor'
 
 export const dynamic = 'force-dynamic'
@@ -33,6 +43,8 @@ export default async function ItemDetailPage({
   const [
     { data: item },
     { data: sessions },
+    { data: allSessions },
+    { data: stepLinks },
     { data: cats },
     { data: stepsRaw },
     { data: itemProjectRows },
@@ -41,7 +53,7 @@ export default async function ItemDetailPage({
     supabase
       .from('items')
       .select(
-        'id, title, kind, unit_type, total_units, current_units, status, source_url, started_at, completed_at, category_id, scope, steps_weight_mode, deadline',
+        'id, title, kind, unit_type, total_units, current_units, status, source_url, started_at, completed_at, category_id, scope, steps_weight_mode, deadline, estimated_minutes',
       )
       .eq('id', id)
       .eq('user_id', user!.id)
@@ -52,6 +64,15 @@ export default async function ItemDetailPage({
       .eq('item_id', id)
       .order('started_at', { ascending: false })
       .limit(20),
+    // Todas las sesiones del ítem (solo duración) para el tiempo real total
+    // de la sección de eficiencia.
+    supabase.from('sessions').select('id, duration_seconds').eq('item_id', id),
+    // Asociaciones sesión↔paso del ítem, para atribuir tiempo por módulo.
+    supabase
+      .from('session_steps')
+      .select('session_id, step_id, sessions!inner(item_id)')
+      .eq('user_id', user!.id)
+      .eq('sessions.item_id', id),
     supabase
       .from('categories')
       .select('id, name, color, emoji, parent_id')
@@ -59,7 +80,9 @@ export default async function ItemDetailPage({
       .order('order_index', { ascending: true }),
     supabase
       .from('item_steps')
-      .select('id, name, weight_pct, position, is_done, parent_step_id, progress_mode, deadline')
+      .select(
+        'id, name, weight_pct, position, is_done, parent_step_id, progress_mode, deadline, estimated_minutes',
+      )
       .eq('item_id', id)
       .eq('user_id', user!.id)
       .order('position', { ascending: true }),
@@ -86,12 +109,71 @@ export default async function ItemDetailPage({
     parent_step_id: (s.parent_step_id as string | null) ?? null,
     progress_mode: ((s.progress_mode as 'weighted' | 'count' | null) ?? 'weighted'),
     deadline: (s.deadline as string | null) ?? null,
+    estimated_minutes: s.estimated_minutes != null ? Number(s.estimated_minutes) : null,
   }))
 
   const today = todayInTimezone(profile?.timezone)
   const hasSteps = steps.length > 0
   const currentCat = item.category_id ? (cats ?? []).find((c) => c.id === item.category_id) : null
   const scope: ItemScope = (item.scope as ItemScope) ?? 'study'
+
+  // --- Eficiencia: estimado vs. real -------------------------------------
+  const itemEstimatedMinutes =
+    item.estimated_minutes != null ? Number(item.estimated_minutes) : null
+  const itemEstimate = effectiveItemEstimate({ estimated_minutes: itemEstimatedMinutes }, steps)
+  const totalActualSeconds = (allSessions ?? []).reduce(
+    (acc, s) => acc + Number(s.duration_seconds ?? 0),
+    0,
+  )
+  const itemProgress = computeItemProgress(
+    {
+      current_units: Number(item.current_units),
+      total_units: Number(item.total_units),
+      steps_weight_mode: (item.steps_weight_mode as 'equal' | 'custom' | null) ?? 'equal',
+    },
+    steps,
+  )
+  const itemEfficiency = itemEstimate
+    ? computeEfficiency({
+        progress: itemProgress,
+        estimateMinutes: itemEstimate.minutes,
+        actualSeconds: totalActualSeconds,
+        completed: item.status === 'done',
+      })
+    : null
+
+  // Desglose por módulo: tiempo atribuido (reparto igualitario por sesión)
+  // vs. estimación efectiva de cada módulo raíz.
+  const attributedSeconds = attributeSessionTimeToSteps(
+    (allSessions ?? []).map((s) => ({
+      id: s.id as string,
+      duration_seconds: Number(s.duration_seconds ?? 0),
+    })),
+    ((stepLinks ?? []) as Array<{ session_id: string; step_id: string }>).map((l) => ({
+      session_id: l.session_id,
+      step_id: l.step_id,
+    })),
+  )
+  const rootSteps = steps.filter((s) => !s.parent_step_id)
+  const moduleEfficiencies: ModuleEfficiency[] = rootSteps.flatMap((root) => {
+    const estimate = effectiveStepEstimate(root, steps)
+    if (!estimate) return []
+    return [
+      {
+        id: root.id,
+        name: root.name,
+        estimate,
+        efficiency: computeEfficiency({
+          progress: computeStepProgress(root, steps),
+          estimateMinutes: estimate.minutes,
+          actualSeconds: stepActualSeconds(root, steps, attributedSeconds),
+          completed: isStepEffectivelyDone(root, steps),
+        }),
+      },
+    ]
+  })
+  const unestimatedModuleCount = rootSteps.length - moduleEfficiencies.length
+  // ------------------------------------------------------------------------
 
   // Aplanar categorías con sangría
   const flatOptions = (() => {
@@ -135,12 +217,19 @@ export default async function ItemDetailPage({
         itemActions={<ItemActions itemId={item.id} status={item.status} />}
       />
 
+      <ItemEfficiencySection
+        estimate={itemEstimate}
+        efficiency={itemEfficiency}
+        modules={moduleEfficiencies}
+        unestimatedModuleCount={unestimatedModuleCount}
+      />
+
       <section className="space-y-3">
         <h2 className="text-xs uppercase tracking-wider text-muted">Tipo de proyecto</h2>
         <ItemScopeEditor itemId={item.id} currentScope={scope} />
       </section>
 
-      <section className="space-y-3">
+      <section id="detalles" className="space-y-3 scroll-mt-20">
         <div className="flex items-center justify-between">
           <h2 className="text-xs uppercase tracking-wider text-muted">Detalles del ítem</h2>
         </div>
@@ -153,6 +242,7 @@ export default async function ItemDetailPage({
             total_units: Number(item.total_units),
             source_url: item.source_url ?? null,
             deadline: (item.deadline as string | null) ?? null,
+            estimated_minutes: itemEstimatedMinutes,
           }}
         />
       </section>

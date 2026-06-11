@@ -1,11 +1,37 @@
 import { createSupabaseServerClient } from '@/lib/supabase/server'
+import { todayInTimezone } from '@/lib/deadlines/utils'
 import { YearlyHeatmap } from './yearly-heatmap'
 import { WeeklyChart, type WeekDay } from './weekly-chart'
 import { CategoryBreakdown, type CategoryStat } from './category-breakdown'
+import { EfficiencySection } from './efficiency-section'
 import { formatDuration } from '@/lib/format'
 
 export const metadata = { title: 'Stats · Why Not You?' }
 export const dynamic = 'force-dynamic'
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
+
+/** Resuelve el rango de eficiencia desde los search params. Default: últimos
+ *  30 días. Rango inválido (formato o desde > hasta) cae al default. */
+function resolveRange(
+  todayLocal: string,
+  desdeParam?: string,
+  hastaParam?: string,
+): { desde: string; hasta: string } {
+  const fallback = { desde: addDays(todayLocal, -29), hasta: todayLocal }
+  if (!desdeParam || !hastaParam) return fallback
+  if (!DATE_RE.test(desdeParam) || !DATE_RE.test(hastaParam)) return fallback
+  if (Number.isNaN(Date.parse(`${desdeParam}T00:00:00Z`))) return fallback
+  if (Number.isNaN(Date.parse(`${hastaParam}T00:00:00Z`))) return fallback
+  if (desdeParam > hastaParam) return fallback
+  return { desde: desdeParam, hasta: hastaParam }
+}
+
+function addDays(isoDate: string, delta: number): string {
+  const d = new Date(`${isoDate}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + delta)
+  return d.toISOString().slice(0, 10)
+}
 
 type DayMin = {
   local_date: string
@@ -19,7 +45,12 @@ type SessionRow = {
   items: { user_id: string; scope: string; category_id: string | null } | { user_id: string; scope: string; category_id: string | null }[]
 }
 
-export default async function StatsPage() {
+export default async function StatsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ desde?: string; hasta?: string }>
+}) {
+  const { desde: desdeParam, hasta: hastaParam } = await searchParams
   const supabase = await createSupabaseServerClient()
   const {
     data: { user },
@@ -66,6 +97,9 @@ export default async function StatsPage() {
   const tz = profile?.timezone ?? 'UTC'
   const itemsArr = itemRows ?? []
   const hasWork = itemsArr.some((i) => i.scope === 'work')
+
+  const todayLocal = todayInTimezone(tz)
+  const { desde, hasta } = resolveRange(todayLocal, desdeParam, hastaParam)
 
   const today = new Date(new Date().toLocaleString('en-US', { timeZone: tz }))
   const monday = new Date(today)
@@ -253,6 +287,14 @@ export default async function StatsPage() {
           </p>
         )}
       </section>
+
+      <EfficiencySection
+        userId={user!.id}
+        tz={tz}
+        today={todayLocal}
+        desde={desde}
+        hasta={hasta}
+      />
 
       {categoryStats.length > 0 && (
         <section className="space-y-4">

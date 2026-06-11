@@ -21,6 +21,7 @@ export async function createItemAction(
     category_id: formData.get('category_id') || '',
     scope: formData.get('scope') || 'study',
     deadline: formData.get('deadline') || '',
+    estimated_minutes: formData.get('estimated_minutes') || '',
   })
   if (!parsed.success) {
     return { error: parsed.error.issues[0].message }
@@ -42,6 +43,7 @@ export async function createItemAction(
     category_id: parsed.data.category_id || null,
     scope: parsed.data.scope,
     deadline: parsed.data.deadline || null,
+    estimated_minutes: parsed.data.estimated_minutes || null,
   })
 
   if (error) return { error: 'No pudimos guardar el ítem.' }
@@ -84,6 +86,9 @@ export async function updateItemFieldsAction(
   if (parsed.data.deadline !== undefined) {
     patch.deadline = parsed.data.deadline || null
   }
+  if (parsed.data.estimated_minutes !== undefined) {
+    patch.estimated_minutes = parsed.data.estimated_minutes || null
+  }
 
   if (Object.keys(patch).length === 0) return { ok: true }
 
@@ -112,6 +117,7 @@ export async function updateItemFieldsAction(
   revalidatePath('/biblioteca')
   revalidatePath('/stats')
   revalidatePath('/agenda')
+  revalidatePath('/proyectos')
   revalidatePath(`/item/${parsed.data.id}`)
   return { ok: true }
 }

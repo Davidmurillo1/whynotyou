@@ -20,6 +20,7 @@ export type StepRow = {
   parent_step_id: string | null
   progress_mode: ProgressMode
   deadline: string | null
+  estimated_minutes: number | null
 }
 
 export type StepActionResult =
@@ -70,6 +71,7 @@ export async function createStepAction(input: {
   position?: number
   parent_step_id?: string
   progress_mode?: ProgressMode
+  estimated_minutes?: number | ''
 }): Promise<StepActionResult> {
   const parsed = createStepSchema.safeParse(input)
   if (!parsed.success) return { error: parsed.error.issues[0].message }
@@ -138,11 +140,14 @@ export async function createStepAction(input: {
   if (parsed.data.progress_mode !== undefined) {
     insertPayload.progress_mode = parsed.data.progress_mode
   }
+  if (parsed.data.estimated_minutes !== undefined) {
+    insertPayload.estimated_minutes = parsed.data.estimated_minutes || null
+  }
 
   const { data: inserted, error } = await supabase
     .from('item_steps')
     .insert(insertPayload)
-    .select('id, name, weight_pct, position, is_done, parent_step_id, progress_mode, deadline')
+    .select('id, name, weight_pct, position, is_done, parent_step_id, progress_mode, deadline, estimated_minutes')
     .single()
   if (error || !inserted) return { error: mapPgError(error ?? { message: 'insert_failed' }) }
 
@@ -158,11 +163,14 @@ export async function createStepAction(input: {
       parent_step_id: (inserted.parent_step_id as string | null) ?? null,
       progress_mode: ((inserted.progress_mode as ProgressMode | null) ?? 'weighted'),
       deadline: (inserted.deadline as string | null) ?? null,
+      estimated_minutes:
+        inserted.estimated_minutes != null ? Number(inserted.estimated_minutes) : null,
     },
   }
 }
 
-/** Edita parcialmente un paso (nombre, peso, posición, is_done, fecha límite). */
+/** Edita parcialmente un paso (nombre, peso, posición, is_done, fecha límite,
+ *  tiempo estimado). */
 export async function updateStepAction(input: {
   id: string
   name?: string
@@ -171,6 +179,7 @@ export async function updateStepAction(input: {
   is_done?: boolean
   progress_mode?: ProgressMode
   deadline?: string | null
+  estimated_minutes?: number | null | ''
 }): Promise<StepActionResult> {
   const parsed = updateStepSchema.safeParse(input)
   if (!parsed.success) return { error: parsed.error.issues[0].message }
@@ -203,6 +212,9 @@ export async function updateStepAction(input: {
   }
   if (parsed.data.deadline !== undefined) {
     patch.deadline = parsed.data.deadline || null
+  }
+  if (parsed.data.estimated_minutes !== undefined) {
+    patch.estimated_minutes = parsed.data.estimated_minutes || null
   }
 
   if (Object.keys(patch).length === 0) return { ok: true }

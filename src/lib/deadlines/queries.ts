@@ -2,6 +2,7 @@ import type { createSupabaseServerClient } from '@/lib/supabase/server'
 import {
   computeItemProgress,
   computeStepProgress,
+  isStepEffectivelyDone,
   type StepLike,
   type StepsWeightMode,
 } from '@/lib/items/progress'
@@ -188,6 +189,10 @@ export async function fetchDeadlineEntries(
   }
 
   for (const i of items) {
+    const progress = clamp01(computeItemProgress(i, stepsByItem.get(i.id) ?? []))
+    // Items al 100% (típicamente completados vía pasos, sin que `status` haya
+    // pasado a 'done' automáticamente) ya cumplieron — fuera de la agenda.
+    if (progress >= 1) continue
     const ctx: string[] = []
     const firstProject = firstProjectByItem.get(i.id)
     if (firstProject) ctx.push(firstProject)
@@ -199,7 +204,7 @@ export async function fetchDeadlineEntries(
       contextLabel: ctx.length > 0 ? ctx.join(' · ') : null,
       deadline: i.deadline,
       href: `/item/${i.id}`,
-      progress: clamp01(computeItemProgress(i, stepsByItem.get(i.id) ?? [])),
+      progress,
       urgency: getUrgency(i.deadline, today),
       daysLeft: daysLeft(i.deadline, today),
     })
@@ -209,6 +214,10 @@ export async function fetchDeadlineEntries(
     const itemSteps = stepsByItem.get(s.item_id) ?? []
     const isModule = !s.parent_step_id
     const fullStep = itemSteps.find((x) => x.id === s.id)
+    // Para módulos, `is_done` en DB es false aunque todas sus tareas estén
+    // hechas (estado derivado). Excluimos los módulos efectivamente completos:
+    // ya no son pendientes, así que no deberían aparecer como "vencidos".
+    if (fullStep && isStepEffectivelyDone(fullStep, itemSteps)) continue
     const hasChildren = isModule && itemSteps.some((x) => x.parent_step_id === s.id)
     const ctx: string[] = []
     if (s.item) ctx.push(s.item.title)

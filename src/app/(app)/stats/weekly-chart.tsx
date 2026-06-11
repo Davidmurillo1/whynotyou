@@ -1,9 +1,13 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useSyncExternalStore } from 'react'
 import { BarChart, Bar, XAxis, ResponsiveContainer, Tooltip, Legend, Cell } from 'recharts'
 
 const DAYS_ES = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom']
+
+const subscribeNoop = () => () => {}
+const getTrue = () => true
+const getFalse = () => false
 
 export type WeekDay = {
   date: string
@@ -18,8 +22,9 @@ export function WeeklyChart({
   days: WeekDay[]
   hasWork: boolean
 }) {
-  const [mounted, setMounted] = useState(false)
-  useEffect(() => setMounted(true), [])
+  // Detección de hidratación sin setState-en-effect: en el server devuelve
+  // false, en el cliente true a partir del primer render post-hidratación.
+  const mounted = useSyncExternalStore(subscribeNoop, getTrue, getFalse)
 
   const data = days.map((d, i) => ({
     day: DAYS_ES[i],

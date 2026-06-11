@@ -10,6 +10,7 @@ import {
   PROJECT_DEFAULT_COLOR,
   PROJECT_SUGGESTED_EMOJIS,
 } from '@/lib/projects/constants'
+import { EstimatedTimeInput } from '@/components/estimated-time-input'
 
 export function ProjectForm() {
   const [state, action, pending] = useActionState<ProjectFormState, FormData>(
@@ -68,6 +69,8 @@ export function ProjectForm() {
         />
         <p className="text-xs text-muted/80">¿Para cuándo querés cerrar este proyecto?</p>
       </div>
+
+      <EstimatedTimeInput hint="Si no lo cargás, lo derivamos sumando las estimaciones de sus ítems." />
 
       <div className="space-y-1.5">
         <label className="block text-sm text-muted">Color</label>
