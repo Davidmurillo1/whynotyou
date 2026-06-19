@@ -1,6 +1,6 @@
-# Why Not You? — Seguimiento de aprendizaje
+# Why Not You? — Gestión de tiempo entre estudio y trabajo
 
-App personal para registrar y seguir todo lo que estás aprendiendo: libros, cursos en video, formaciones largas, documentación, series de artículos, podcasts. Permite crear ítems con un total de unidades (páginas, videos, módulos, capítulos, horas, %), registrar sesiones cronometradas, ver estadísticas semanales y un heatmap anual, agrupar por categorías y configurar recordatorios.
+App personal para registrar y medir el tiempo invertido en lo que estás aprendiendo y en lo que estás trabajando: libros, cursos, formaciones, documentación, proyectos transversales. Permite crear ítems con un total de unidades (páginas, videos, módulos, capítulos, horas, %) o con pasos jerárquicos (módulos → tareas), agruparlos en categorías y proyectos, registrar sesiones cronometradas con avance por pasos, asignar fechas límite y estimaciones de tiempo, y ver estadísticas semanales, heatmap anual, eficiencia (estimado vs. real) y una agenda de deadlines.
 
 El idioma del producto es **español argentino** (vos, "querés", etc.). La UI es **dark-only**.
 
@@ -12,7 +12,7 @@ El idioma del producto es **español argentino** (vos, "querés", etc.). La UI e
 - **React 19.2.4** + Server Components + Server Actions.
 - **TypeScript 5**.
 - **Tailwind v4** (`@tailwindcss/postcss`).
-- **Supabase** (`@supabase/ssr` 0.10, `@supabase/supabase-js` 2.106) para auth + base de datos.
+- **Supabase** (`@supabase/ssr` 0.10, `@supabase/supabase-js` 2.106) para auth + base de datos + RPCs.
 - **Zod 4** para validación de input.
 - **React Hook Form 7** para forms del cliente.
 - **Recharts 3** para gráficos, **Framer Motion 12** para animaciones, **canvas-confetti** para celebraciones, **lucide-react** para iconos, **date-fns 4** para fechas.
@@ -24,51 +24,41 @@ El idioma del producto es **español argentino** (vos, "querés", etc.). La UI e
 ```
 src/
 ├── app/
-│   ├── layout.tsx              # Layout raíz: <html lang="es"> dark + fuentes Geist
-│   ├── page.tsx                # Redirige a /dashboard (el proxy resuelve login vs dashboard)
-│   ├── not-found.tsx           # 404 global (cuando el proxy permite el request)
-│   ├── globals.css             # Tokens de color + setup de Tailwind v4
+│   ├── layout.tsx              # <html lang="es"> dark + fuentes Geist
+│   ├── page.tsx                # Redirige a /dashboard (el proxy decide login vs dashboard)
+│   ├── not-found.tsx           # 404 global
+│   ├── globals.css             # Tokens (incluye --color-warning y --color-success)
 │   ├── (auth)/                 # Grupo público — login y signup
-│   │   ├── layout.tsx          # Layout centrado, sin nav
-│   │   ├── login/
-│   │   └── signup/
-│   └── (app)/                  # Grupo autenticado — header + nav + footer móvil
-│       ├── layout.tsx          # Valida sesión, si no hay → redirect /login
-│       ├── dashboard/          # "Hoy" — saludo, ítems activos, última sesión
-│       ├── biblioteca/         # Listado completo de ítems
-│       ├── categorias/         # CRUD de categorías
+│   └── (app)/                  # Grupo autenticado — header + nav (7 entradas) + footer móvil
+│       ├── dashboard/          # "Hoy" — saludo, ítems activos, "Vence pronto", última sesión
+│       ├── agenda/             # Deadlines: vistas Lista, Calendario, Línea de tiempo
+│       ├── biblioteca/         # Tabs En curso/Completados, filtro por scope
+│       ├── proyectos/          # Listado, nuevo, detalle con ítems miembros y eficiencia
+│       ├── categorias/         # CRUD jerárquico (parent_id)
 │       ├── item/
-│       │   ├── nuevo/          # Crear ítem
+│       │   ├── nuevo/          # Crear ítem (con scope, fecha límite y estimación)
 │       │   └── [id]/
-│       │       ├── page.tsx
-│       │       ├── not-found.tsx
-│       │       ├── sesion/     # Cronómetro de sesión activa
-│       │       └── completado/ # Pantalla post-finalización
-│       ├── stats/              # Resumen semanal, heatmap anual, breakdown por categoría
+│       │       ├── page.tsx    # Detalle: progreso, pasos, eficiencia, deadline, proyectos
+│       │       ├── sesion/     # Cronómetro persistido en localStorage + selección N pasos
+│       │       └── completado/
+│       ├── stats/              # Heatmap anual, semana, eficiencia con rango, por categoría
 │       └── ajustes/            # Perfil, password, recordatorios
-├── components/                 # UI compartida (Button, EmptyState, ProgressRing, Confetti, CategoryBadge)
+├── components/                 # UI compartida — Button, EmptyState, ProgressRing, Confetti,
+│                               # CategoryBadge, ProjectBadge, ProjectPicker, DeadlineBadge,
+│                               # EfficiencyBullet, EstimatedTimeInput
 ├── lib/
-│   ├── supabase/
-│   │   ├── server.ts           # createSupabaseServerClient() — Server Components y Server Actions
-│   │   ├── client.ts           # Browser client
-│   │   └── proxy.ts            # updateSession() — usado por src/proxy.ts
-│   ├── actions/                # Todas las Server Actions ("use server")
-│   │   ├── auth.ts             # login, signup, logout
-│   │   ├── profile.ts          # update username/timezone, password
-│   │   ├── reminders.ts        # configuración de recordatorios
-│   │   ├── categories.ts       # CRUD categorías
-│   │   ├── items.ts            # CRUD ítems
-│   │   └── sessions.ts         # registrar sesión de aprendizaje
-│   ├── auth/schemas.ts         # Zod: login/signup
-│   ├── items/
-│   │   ├── schemas.ts          # Zod: createItem, createSession
-│   │   └── constants.ts        # ITEM_KIND_OPTIONS, UNIT_TYPE_OPTIONS, ITEM_STATUS_OPTIONS + labels
-│   ├── categories/
-│   │   ├── schemas.ts
-│   │   └── constants.ts
-│   ├── format.ts               # formatDuration, formatTimer, formatRelative, formatDate
-│   ├── greetings.ts            # Saludo dinámico según hora + racha + sesión del día
-│   └── highlights.ts
+│   ├── supabase/{server,client,proxy}.ts
+│   ├── actions/                # Server Actions ("use server")
+│   │   ├── auth.ts, profile.ts, reminders.ts, categories.ts
+│   │   ├── items.ts, item-weight-mode.ts, steps.ts
+│   │   ├── projects.ts, sessions.ts
+│   ├── auth/schemas.ts
+│   ├── items/                  # schemas, steps-schemas, constants, progress.ts
+│   ├── categories/             # schemas, constants
+│   ├── projects/               # schemas, constants
+│   ├── deadlines/              # schemas, utils (urgencia, agrupado), queries
+│   ├── efficiency/             # compute, format, schemas
+│   ├── format.ts, greetings.ts, highlights.ts
 └── proxy.ts                    # ⚠️ Antes "middleware.ts" — renombrado en Next 16
 ```
 
@@ -77,150 +67,162 @@ src/
 ## Decisiones de arquitectura clave
 
 ### 1. El "middleware" se llama `proxy` en Next 16
-
-`src/proxy.ts` exporta `proxy()` (no `middleware()`). Si hace falta agregar otro hook a nivel de request, va acá. El `matcher` excluye assets estáticos.
+`src/proxy.ts` exporta `proxy()` (no `middleware()`). El `matcher` excluye assets estáticos.
 
 ### 2. El proxy gatekeepea la sesión
-
 `src/lib/supabase/proxy.ts → updateSession()`:
-- Lee la sesión vía cookies.
-- Si **no hay user** y el path **no empieza con un prefijo público** (`PUBLIC_PATHS = ['/login', '/signup']`), redirige a `/login`.
+- Si **no hay user** y el path no empieza con `PUBLIC_PATHS = ['/login', '/signup']`, redirige a `/login`.
 - Si **hay user** y el path es público, redirige a `/dashboard`.
 
-**Implicancia clave**: cualquier feature que pretenda servir contenido a usuarios sin sesión tiene que vivir bajo `/login/...` o `/signup/...`, **o** agregar su prefijo a `PUBLIC_PATHS`. Por ejemplo, el `not-found.tsx` raíz solo se ve para usuarios autenticados o para rutas inexistentes dentro de grupos públicos — ver [openspec/specs/root-not-found-page/spec.md](openspec/specs/root-not-found-page/spec.md).
+Cualquier feature pública tiene que vivir bajo esos prefijos o agregar su prefijo a `PUBLIC_PATHS`.
 
 ### 3. `/` siempre redirige a `/dashboard`
-
-`src/app/page.tsx` hace `redirect('/dashboard')` y el proxy decide el destino real. Es la **única fuente de verdad** sobre "a dónde mandar al usuario según su sesión". Cuando necesites un link "volver al inicio", usá `href="/"` para reutilizar esa lógica en lugar de duplicarla.
+`src/app/page.tsx` hace `redirect('/dashboard')` y el proxy decide el destino real. Es la **única fuente de verdad** sobre "a dónde mandar al usuario según su sesión". Para links "volver al inicio", usá `href="/"`.
 
 ### 4. Server Actions para todas las mutaciones
-
-Las mutaciones (crear ítem, registrar sesión, login, etc.) viven en `src/lib/actions/*.ts` con `"use server"`. Patrón estándar:
+Patrón estándar:
 1. Validar con Zod (`safeParse`).
-2. Obtener `user` vía `createSupabaseServerClient().auth.getUser()`. Si no hay user, devolver error.
-3. Operar en Supabase filtrando por `user_id` (defensa en profundidad además de RLS).
+2. `createSupabaseServerClient().auth.getUser()`; si no hay user, devolver `{ error }`.
+3. Operar en Supabase **filtrando por `user_id`** (defensa en profundidad además de RLS).
 4. `revalidatePath()` de las rutas afectadas.
 5. `redirect()` si corresponde.
 
-Cuando agregues actions, **siempre filtrá por `user_id`** en updates/deletes aunque haya RLS — defensa en capas.
+Para flujos atómicos complejos (sesión + asociaciones a pasos + marcar pasos terminados) hay **RPCs en Supabase** (ej. `create_session_with_steps`).
 
-### 5. Variables de entorno de Supabase
+### 5. Server Components mutando cookies
+`createSupabaseServerClient()` envuelve `cookieStore.set()` en try/catch silencioso porque no se puede mutar cookies desde un Server Component — solo desde Server Actions o Route Handlers. El refresh efectivo de la sesión ocurre en el proxy. **No quites ese try/catch.**
 
+### 6. Cálculos de timezone server-side
+Las clasificaciones de urgencia de deadlines, los rangos de eficiencia y el "hoy" del usuario se calculan en el servidor usando `profile.timezone` y se pasan como prop. El cliente nunca recalcula con su reloj.
+
+### 7. Cronómetro con persistencia local
+`SessionRunner` guarda su estado (`startedAt`, `accumulatedPausedMs`, `lastTickAt`, fase, selecciones, nota) en `localStorage` bajo `sl:session:<itemId>`. Si al montar detecta una sesión válida (<24h), ofrece **Recuperar** o **Descartar** antes de arrancar una nueva. La entrada se borra al guardar la sesión exitosamente.
+
+### 8. Variables de entorno
 ```
 NEXT_PUBLIC_SUPABASE_URL
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
 ```
-
-(El proyecto usa la nomenclatura "publishable key" en lugar de "anon key" — respetala al agregar referencias.)
-
-### 6. Server Components mutando cookies
-
-`createSupabaseServerClient()` envuelve `cookieStore.set()` en try/catch silencioso porque **no se puede mutar cookies desde un Server Component** — solo desde Server Actions o Route Handlers. El refresh efectivo de la sesión ocurre en el proxy. No quites ese try/catch.
+El proyecto usa "publishable key" en lugar de "anon key" — respetalo.
 
 ---
 
 ## Convenciones de UI
 
 ### Idioma
-- Toda la copia visible al usuario va en **español argentino** (vos, "querés", "tenés", "abríla").
-- Excepción: nombres técnicos (`Supabase`, `Next.js`, etc.) en su capitalización original.
+Toda la copia visible va en **español argentino** (voseo, "querés", "tenés", "abríla"). Excepción: nombres técnicos (`Supabase`, `Next.js`, etc.) en su capitalización original.
 
-### Tokens de color (Tailwind, definidos en `globals.css`)
-- `bg-bg` — fondo principal
-- `bg-surface`, `bg-surface-2` — superficies elevadas
-- `text-text` — texto primario
-- `text-muted` — texto secundario
-- `text-accent` — links y CTAs
-- `border-border` — bordes
-- `bg-danger` — destructivo
+### Tokens de color (Tailwind, en `globals.css`)
+- `bg-bg`, `bg-surface`, `bg-surface-2`, `border-border` — superficies y bordes
+- `text-text`, `text-muted`, `text-accent` — tipografía y links
+- `bg-success` / `--color-success` — estado "Adelantado" y verde general
+- `bg-warning` / `--color-warning` — deadlines próximos y eficiencia "Más lento"
+- `bg-danger` / `--color-danger` — destructivo, "Vencido" y "Estimación superada"
+- `text-streak` — racha
 
-Usá estos tokens — **no hardcodees colores Tailwind crudos** (`text-gray-400`, etc.).
+**No hardcodees colores Tailwind crudos** (`text-gray-400`, `bg-green-500`, etc.).
 
 ### Componentes base
-- [`<Button>`](src/components/button.tsx) con variantes `primary | secondary | ghost | danger`.
-- [`<EmptyState>`](src/components/empty-state.tsx) para listas vacías.
-- [`<ProgressRing>`](src/components/progress-ring.tsx) para porcentaje de avance.
-- [`<CategoryBadge>`](src/components/category-badge.tsx) para mostrar categorías.
+`<Button>`, `<EmptyState>`, `<ProgressRing>`, `<CategoryBadge>`, `<ProjectBadge>`, `<ProjectPicker>`, `<DeadlineBadge>`, `<EfficiencyBullet>`, `<EstimatedTimeInput>`. Si necesitás algo nuevo, fijate primero si encaja con uno existente.
 
 ### Server Components por defecto
-Solo agregá `"use client"` cuando hace falta estado, efectos o handlers del browser. Forms que usan `useFormState` van marcados como client, pero la action sigue siendo server.
+Solo `"use client"` cuando hace falta estado, efectos o handlers del browser.
 
 ### Rutas en español
-`/biblioteca`, `/categorias`, `/ajustes`, `/dashboard`, `/stats`, `/item/[id]/sesion`, `/item/[id]/completado`. Si agregás rutas, mantenelas en español.
+`/dashboard`, `/agenda`, `/biblioteca`, `/proyectos`, `/categorias`, `/stats`, `/ajustes`, `/item/[id]/sesion`, `/item/[id]/completado`. Mantené el patrón si agregás rutas.
+
+### Navegación
+7 entradas en el orden: **Hoy · Agenda · Biblioteca · Proyectos · Categorías · Stats · Ajustes**. Mobile usa `grid-cols-7` con ícono `lucide-react` + label corto. No desbordar en viewports de 360px.
 
 ---
 
 ## Modelo de datos (Supabase)
 
-Tablas principales (inferidas del código — confirmá en Supabase antes de cambios de schema):
+Confirmá en Supabase antes de cambios de schema. Tablas principales:
 
-- `profiles`: `id` (= auth.users.id), `username`, `timezone`, configuración de recordatorios.
-- `items`: `id`, `user_id`, `title`, `kind` (book | video_course | long_program | docs | article_series | podcast), `unit_type` (pages | videos | modules | chapters | hours | percent), `total_units`, `source_url`, `category_id`, `status` (active | paused | done | abandoned), `scope` (study | work), `steps_weight_mode` (equal | custom — solo aplica si el ítem tiene pasos; ver `openspec/specs/item-steps/spec.md`).
-- `sessions`: `id`, `user_id`, `item_id`, `started_at`, `duration_seconds`, `units_progressed`, `note`.
-- `categories`: `id`, `user_id`, `name`, color.
+- **`profiles`** — `id` (= auth.users.id), `username`, `display_name`, `timezone`, recordatorios.
+- **`items`** — `id`, `user_id`, `title`, `kind` (book | video_course | long_program | docs | article_series | podcast), `unit_type` (pages | videos | modules | chapters | hours | percent), `total_units`, `current_units`, `source_url`, `category_id`, `status` (active | paused | done | abandoned), `scope` (study | work), `steps_weight_mode` (equal | custom), `deadline` (date, null), `estimated_minutes` (int, null, >0), `completed_at`.
+- **`item_steps`** — `id`, `user_id`, `item_id`, `parent_step_id` (1 solo nivel: módulos raíz, tareas hijas), `name`, `position`, `weight_pct` (numeric(6,2)), `is_done`, `done_at`, `progress_mode` (weighted | count, solo para módulos con tareas), `deadline`, `estimated_minutes`.
+- **`categories`** — `id`, `user_id`, `name`, `color`, `emoji`, `parent_id` (jerarquía).
+- **`projects`** — `id`, `user_id`, `name`, `description`, `color`, `emoji`, `status` (active | archived), `order_index`, `deadline`, `estimated_minutes`.
+- **`project_items`** — join N:M, PK compuesta `(project_id, item_id)` + `user_id` denormalizado. `ON DELETE CASCADE` desde ambos lados.
+- **`sessions`** — `id`, `user_id`, `item_id`, `started_at`, `duration_seconds`, `units_progressed`, `note`. La columna legacy `step_id` se preserva pero las escrituras nuevas usan `session_steps`.
+- **`session_steps`** — join N:M sesión↔paso, PK `(session_id, step_id)` + `user_id`, `completed_in_session` (bool). Cascade desde sesión y desde paso.
+- **`streaks`** — `user_id`, `current`, `longest`, `freezes_available`, `last_active_date`.
+- **Vista `daily_minutes`** — por día y usuario: `minutes`, `minutes_study`, `minutes_work` (invariante: `minutes = minutes_study + minutes_work`).
 
-Cualquier nueva consulta debe respetar **RLS** (filtrado por `user_id` desde el JWT) y además filtrar explícito en el código.
+Las migraciones viven en `supabase/migrations/`.
+
+Cualquier nueva consulta debe respetar **RLS** (filtrado por `user_id`) y filtrar explícito en el código. Evitá N+1: las superficies como agenda, biblioteca, dashboard y stats agregan datos con queries one-shot paralelas y cruzan en memoria.
 
 ---
 
-## Lint conocido
+## Capabilities OpenSpec activas
 
-`npm run lint` actualmente reporta **5 errores preexistentes** que no son bloqueantes para el funcionamiento pero conviene resolver:
+Cada capability tiene su spec en `openspec/specs/<name>/spec.md`. Para tareas focalizadas, abrí el spec puntual en lugar de cargar todo en contexto.
 
-| Archivo | Línea | Regla |
-|---------|-------|-------|
-| `src/app/(app)/ajustes/profile-form.tsx` | 23 | `react-hooks/set-state-in-effect` |
-| `src/app/(app)/dashboard/page.tsx` | 64 | `react-hooks/purity` (Date.now en render) |
-| `src/app/(app)/item/[id]/sesion/session-runner.tsx` | 29 | `react-hooks/purity` |
-| `src/app/(app)/stats/weekly-chart.tsx` | 10 | `react-hooks/set-state-in-effect` |
-| `src/lib/supabase/proxy.ts` | 7 | `prefer-const` |
+| Capability | Propósito | Spec |
+|---|---|---|
+| `root-not-found-page` | Página 404 raíz con la estética del producto, convive con el proxy. | [spec](openspec/specs/root-not-found-page/spec.md) |
+| `item-scope` | Atributo `scope` (study / work) por ítem, filtros, edición de atributos del ítem y copy adaptativo del greeting. | [spec](openspec/specs/item-scope/spec.md) |
+| `stats-by-scope` | Stats (totales, gráfico semanal, breakdown por categoría) desglosados entre estudio y trabajo; heatmap queda global. | [spec](openspec/specs/stats-by-scope/spec.md) |
+| `item-steps` | Pasos jerárquicos (módulos → tareas, 1 nivel) con peso (`equal` / `custom`), `progress_mode` (`weighted` / `count`), sesiones N:N vía `session_steps`, UI de selección múltiple al cerrar sesión, persistencia local del cronómetro. | [spec](openspec/specs/item-steps/spec.md) |
+| `dashboard-items-activos` | Dashboard solo lista ítems "en curso" (status active/paused y progreso < 100%). | [spec](openspec/specs/dashboard-items-activos/spec.md) |
+| `biblioteca-completados` | Biblioteca con tabs En curso / Completados (URL `?view=`), sub-secciones por status, progreso consistente con dashboard. | [spec](openspec/specs/biblioteca-completados/spec.md) |
+| `projects` | Proyectos N:M sobre ítems, CRUD, listado/detalle, picker desde el detalle del ítem, chip en biblioteca, entrada de nav. | [spec](openspec/specs/projects/spec.md) |
+| `deadlines` | Fechas límite opcionales en proyectos/ítems/pasos, página `/agenda` con vistas Lista / Calendario / Línea de tiempo, `<DeadlineBadge>` consistente, módulo "Vence pronto" en dashboard. | [spec](openspec/specs/deadlines/spec.md) |
+| `eficiencia-tiempo` | Estimación opcional por entidad, estimación efectiva derivada, índice `T_estimado / T_real` con estados, atribución de tiempo por paso, módulos en detalle ítem/proyecto, sección en `/stats` con rango de fechas. | [spec](openspec/specs/eficiencia-tiempo/spec.md) *(tras archivar el change actual)* |
 
-Si tu cambio toca alguno de esos archivos, aprovechá para arreglarlo. **No introduzcas errores nuevos** — el lint debe quedar igual o mejor.
+Changes en progreso viven bajo `openspec/changes/<name>/`; archivados bajo `openspec/changes/archive/YYYY-MM-DD-<name>/`.
 
 ---
 
 ## OpenSpec — flujo de cambios
 
-El proyecto usa **OpenSpec** (esquema `spec-driven`) para documentar features antes de implementarlas. Estructura:
-
 ```
 openspec/
-├── specs/                      # Specs principales (estado actual del producto)
-│   └── <capability>/spec.md
+├── specs/<capability>/spec.md           # Estado actual del producto
 └── changes/
-    ├── <change-name>/          # Change en progreso
-    │   ├── proposal.md         # Por qué
-    │   ├── design.md           # Cómo (decisiones + tradeoffs)
-    │   ├── specs/              # Delta specs (ADDED/MODIFIED/REMOVED Requirements)
-    │   └── tasks.md            # Checklist de implementación
-    └── archive/
-        └── YYYY-MM-DD-<name>/  # Changes ya implementados y archivados
+    ├── <change-name>/                   # Change en progreso
+    │   ├── proposal.md (por qué)
+    │   ├── design.md (cómo: decisiones + tradeoffs)
+    │   ├── specs/ (delta: ADDED / MODIFIED / REMOVED Requirements)
+    │   └── tasks.md (checklist)
+    └── archive/YYYY-MM-DD-<name>/
 ```
 
-### Slash commands disponibles
-
+### Slash commands
 | Comando | Qué hace |
-|---------|----------|
-| `/opsx:propose <name>` | Crea un change completo (proposal + design + specs + tasks) en una pasada |
-| `/opsx:new <name>` | Crea un change paso a paso |
+|---|---|
+| `/opsx:propose <name>` | Change completo en una pasada (proposal + design + specs + tasks) |
+| `/opsx:new <name>` | Change paso a paso |
 | `/opsx:explore` | Modo exploración — pensar sin tocar código |
 | `/opsx:continue <name>` | Retomar un change en progreso |
 | `/opsx:ff <name>` | Fast-forward (todos los artifacts de una) |
 | `/opsx:apply <name>` | Implementar las tasks |
-| `/opsx:verify <name>` | Verificar que la implementación matchea los artifacts |
+| `/opsx:verify <name>` | Verificar implementación vs. artifacts |
 | `/opsx:archive <name>` | Archivar (mueve a `archive/` y syncea specs principales) |
 
 ### Reglas para artifacts
-- **Specs** usan exactamente **4 `#` para escenarios** (`#### Scenario:`); 3 hashtags rompen el parser silenciosamente.
-- **Scenarios** usan `**WHEN**`/`**THEN**`/`**AND**`.
-- **Requirements** usan SHALL/MUST (no should/may).
-- **Idioma**: el contenido de los artifacts va en español, salvo nombres técnicos.
+- **Specs**: exactamente **4 `#` para escenarios** (`#### Scenario:`); 3 hashtags rompen el parser silenciosamente.
+- **Scenarios**: `**WHEN**` / `**THEN**` / `**AND**`.
+- **Requirements**: SHALL / MUST (no should/may).
+- **Idioma**: español argentino, salvo nombres técnicos.
 
-### Para changes que afectan el comportamiento observable
-Crear un delta spec en `changes/<name>/specs/<capability>/spec.md`. Al archivar, el CLI lo sincroniza a `openspec/specs/<capability>/spec.md`.
+Changes que afectan comportamiento observable → delta spec en `changes/<name>/specs/<capability>/spec.md`. Changes puramente internos (refactor, infra, tooling) → `openspec archive --skip-specs` o sin delta spec.
 
-### Para changes puramente internos (refactors, infra, tooling)
-Usar `openspec archive --skip-specs` o no crear delta spec.
+---
+
+## Lint conocido
+
+`npm run lint` actualmente reporta **2 errores preexistentes** (verificado el 2026-06-19):
+
+| Archivo | Línea | Regla |
+|---|---|---|
+| `src/app/(app)/ajustes/profile-form.tsx` | 23 | `react-hooks/set-state-in-effect` |
+| `src/lib/supabase/proxy.ts` | 7 | `prefer-const` |
+
+Si tu cambio toca esos archivos, aprovechá para arreglarlo. **No introduzcas errores nuevos** — el lint debe quedar igual o mejor.
 
 ---
 
@@ -233,13 +235,13 @@ npm run start   # next start
 npm run lint    # eslint
 ```
 
-El entorno es **Windows + PowerShell**. Si el agente corre comandos shell, usar la sintaxis de PowerShell (`if (...) {...}`, no `&&` para chains condicionales).
+Entorno: **Windows + PowerShell**. Para chains condicionales usá `if (...) {...}`, no `&&`.
 
 ---
 
 ## Estilo de commits
 
-Los dos commits existentes son cortos y descriptivos en español ("Primer Commit MVP"). Mantenelo conciso, en español, sin convencional commits formales.
+Cortos y descriptivos en español (ej. "Eficiencia de Tiempo Implementada", "Funcionalidad Deadlines Añadida"). Sin convencional commits formales.
 
 ---
 
@@ -248,11 +250,13 @@ Los dos commits existentes son cortos y descriptivos en español ("Primer Commit
 - ❌ No agregar internacionalización; el producto es solo en español.
 - ❌ No agregar un theme switcher; el producto es dark-only.
 - ❌ No usar `middleware.ts` — Next 16 lo renombró a `proxy.ts`.
-- ❌ No hardcodear colores Tailwind (`bg-gray-800`, etc.) — usá los tokens del proyecto.
-- ❌ No agregar tests si no existen ya en la carpeta — el proyecto MVP no tiene suite de tests configurada. Si vas a agregar tests, primero proponé el cambio en un OpenSpec change.
+- ❌ No hardcodear colores Tailwind (`bg-gray-800`, `text-green-500`, etc.) — usá los tokens del proyecto.
+- ❌ No agregar tests si no existen ya en la carpeta — el MVP no tiene suite de tests. Si vas a agregar, primero proponé un OpenSpec change.
 - ❌ No mutar cookies desde Server Components.
 - ❌ No saltearte `revalidatePath` después de mutaciones — la UI queda stale.
 - ❌ No introducir errores de lint nuevos.
+- ❌ No recalcular "hoy" en el cliente — para urgencias y rangos usá la timezone del perfil server-side.
+- ❌ No escribir en `sessions.step_id` desde código nuevo — usá `session_steps` (ver capability `item-steps`).
 
 ---
 
