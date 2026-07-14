@@ -14,6 +14,8 @@ import { formatRelative } from '@/lib/format'
 import { setStepsWeightModeAction } from '@/lib/actions/item-weight-mode'
 import { DeadlineBadge } from '@/components/deadline-badge'
 import { formatDeadlineLabel, getUrgency } from '@/lib/deadlines/utils'
+import { NotesTrigger, NotesPanel, NotesOverview, type Note } from '@/components/notes-control'
+import { createNoteAction, updateNoteAction, deleteNoteAction } from '@/lib/actions/notes'
 import { StepsEditor, type Step } from './steps-editor'
 
 type ItemForShell = {
@@ -47,12 +49,15 @@ export function ItemProgressShell({
   item,
   category,
   initialSteps,
+  initialNotes,
   itemActions,
   today,
 }: {
   item: ItemForShell
   category: CategoryForShell
   initialSteps: Step[]
+  /** Notas del ítem y de sus pasos (estado único, particionado por `step_id`). */
+  initialNotes: Note[]
   /** `<ItemActions itemId={...} status={...} />` y compañía — server component
    *  inyectado como children para no traerlo al cliente. */
   itemActions: ReactNode
@@ -65,6 +70,51 @@ export function ItemProgressShell({
   const [weightMode, setWeightMode] = useState<StepsWeightMode>(item.steps_weight_mode)
   const [, startWeightModeTransition] = useTransition()
   const [weightModeError, setWeightModeError] = useState<string | null>(null)
+
+  // Notas: un único estado con TODAS las notas del ítem + sus pasos. Cada
+  // superficie filtra su slice (item = step_id null; paso = step_id === id).
+  // Así el contador de cualquier ícono se actualiza optimista sin refetch.
+  const [notes, setNotes] = useState<Note[]>(initialNotes)
+  const [notesPending, startNotesTransition] = useTransition()
+  const [notesError, setNotesError] = useState<string | null>(null)
+  const [itemNotesOpen, setItemNotesOpen] = useState(false)
+  const itemNotes = notes.filter((n) => n.step_id === null)
+
+  // Crear (append-on-success): await la action y agrega la nota REAL devuelta.
+  // Devuelve mensaje de error o null (lo consume el composer del panel).
+  const handleCreateNote = async (
+    stepId: string | null,
+    body: string,
+  ): Promise<string | null> => {
+    setNotesError(null)
+    const result = await createNoteAction({ item_id: item.id, step_id: stepId, body })
+    if ('error' in result) return result.error
+    if (result.note) setNotes((prev) => [...prev, result.note!])
+    return null
+  }
+
+  // Editar (append-on-success): await y reemplaza la nota por la devuelta.
+  const handleUpdateNote = async (noteId: string, body: string): Promise<string | null> => {
+    setNotesError(null)
+    const result = await updateNoteAction({ id: noteId, body })
+    if ('error' in result) return result.error
+    if (result.note) setNotes((prev) => prev.map((n) => (n.id === noteId ? result.note! : n)))
+    return null
+  }
+
+  // Borrar (optimista + rollback), calcado de handleDelete de steps.
+  const handleDeleteNote = (noteId: string) => {
+    setNotesError(null)
+    const snapshot = notes
+    setNotes((prev) => prev.filter((n) => n.id !== noteId))
+    startNotesTransition(async () => {
+      const result = await deleteNoteAction({ id: noteId })
+      if ('error' in result) {
+        setNotesError(result.error)
+        setNotes(snapshot)
+      }
+    })
+  }
 
   const handleWeightModeChange = (next: StepsWeightMode) => {
     if (next === weightMode) return
@@ -106,27 +156,34 @@ export function ItemProgressShell({
                 </>
               )}
             </p>
-            {(category || (item.deadline && !isDone)) && (
-              <div className="mt-2 flex items-center gap-2 flex-wrap">
-                {item.deadline && !isDone && (
-                  <DeadlineBadge
-                    urgency={getUrgency(item.deadline, today)}
-                    label={formatDeadlineLabel(item.deadline, today)}
-                    size="md"
+            {/* Meta-row SIEMPRE visible: aloja el ícono de notas del ítem, que
+                debe ser descubrible aunque no haya deadline/categoría/notas. */}
+            <div className="mt-2 flex items-center gap-2 flex-wrap">
+              {item.deadline && !isDone && (
+                <DeadlineBadge
+                  urgency={getUrgency(item.deadline, today)}
+                  label={formatDeadlineLabel(item.deadline, today)}
+                  size="md"
+                />
+              )}
+              {category && (
+                <Link href={`/categorias/${category.id}`}>
+                  <CategoryBadge
+                    name={category.name}
+                    color={category.color}
+                    emoji={category.emoji}
+                    size="sm"
                   />
-                )}
-                {category && (
-                  <Link href={`/categorias/${category.id}`}>
-                    <CategoryBadge
-                      name={category.name}
-                      color={category.color}
-                      emoji={category.emoji}
-                      size="sm"
-                    />
-                  </Link>
-                )}
-              </div>
-            )}
+                </Link>
+              )}
+              <NotesTrigger
+                count={itemNotes.length}
+                open={itemNotesOpen}
+                onToggle={() => setItemNotesOpen((o) => !o)}
+                disabled={notesPending}
+                label="Notas del ítem"
+              />
+            </div>
             {item.source_url && (
               <a
                 href={item.source_url}
@@ -139,6 +196,23 @@ export function ItemProgressShell({
             )}
           </div>
         </div>
+
+        {itemNotesOpen && (
+          <NotesPanel
+            notes={itemNotes}
+            pending={notesPending}
+            onCreate={(body) => handleCreateNote(null, body)}
+            onUpdate={handleUpdateNote}
+            onDelete={handleDeleteNote}
+            title="Notas del ítem"
+          />
+        )}
+
+        {notesError && (
+          <p className="text-sm text-danger" role="alert">
+            {notesError}
+          </p>
+        )}
 
         <div className="flex items-center gap-3 flex-wrap">
           {!isDone && (
@@ -169,6 +243,11 @@ export function ItemProgressShell({
           weightMode={weightMode}
           onWeightModeChange={handleWeightModeChange}
           today={today}
+          notes={notes}
+          notesPending={notesPending}
+          onCreateNote={handleCreateNote}
+          onUpdateNote={handleUpdateNote}
+          onDeleteNote={handleDeleteNote}
         />
         {weightModeError && (
           <p className="text-sm text-danger" role="alert">
@@ -176,6 +255,15 @@ export function ItemProgressShell({
           </p>
         )}
       </section>
+
+      <NotesOverview
+        notes={notes}
+        steps={steps}
+        itemTitle={item.title}
+        pending={notesPending}
+        onUpdate={handleUpdateNote}
+        onDelete={handleDeleteNote}
+      />
     </>
   )
 }

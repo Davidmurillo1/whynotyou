@@ -26,6 +26,7 @@ import { ItemProgressShell } from './item-progress-shell'
 import { ItemProjectsEditor } from './item-projects-editor'
 import { ItemEfficiencySection, type ModuleEfficiency } from './item-efficiency-section'
 import { type Step } from './steps-editor'
+import { type Note } from '@/components/notes-control'
 
 export const dynamic = 'force-dynamic'
 
@@ -49,6 +50,7 @@ export default async function ItemDetailPage({
     { data: stepsRaw },
     { data: itemProjectRows },
     { data: profile },
+    { data: notesRaw },
   ] = await Promise.all([
     supabase
       .from('items')
@@ -94,6 +96,16 @@ export default async function ItemDetailPage({
       .eq('item_id', id)
       .eq('user_id', user!.id),
     supabase.from('profiles').select('timezone').eq('id', user!.id).single(),
+    // Todas las notas del ítem y de sus pasos en una sola query: el `item_id`
+    // está denormalizado en TODA nota (también las de paso), así que filtrar por
+    // item_id trae ítem + módulos + tareas sin depender de los step ids ni de
+    // una 2da pasada. Se particiona en memoria (step_id null = nota del ítem).
+    supabase
+      .from('item_notes')
+      .select('id, item_id, step_id, body, created_at')
+      .eq('item_id', id)
+      .eq('user_id', user!.id)
+      .order('created_at', { ascending: true }),
   ])
 
   if (!item) notFound()
@@ -110,6 +122,16 @@ export default async function ItemDetailPage({
     progress_mode: ((s.progress_mode as 'weighted' | 'count' | null) ?? 'weighted'),
     deadline: (s.deadline as string | null) ?? null,
     estimated_minutes: s.estimated_minutes != null ? Number(s.estimated_minutes) : null,
+  }))
+
+  // Notas del ítem y de sus pasos. La shell las mantiene en un único estado
+  // controlled y las particiona por `step_id` (null = nota del ítem).
+  const notes: Note[] = (notesRaw ?? []).map((n) => ({
+    id: n.id as string,
+    item_id: n.item_id as string,
+    step_id: (n.step_id as string | null) ?? null,
+    body: n.body as string,
+    created_at: n.created_at as string,
   }))
 
   const today = todayInTimezone(profile?.timezone)
@@ -214,6 +236,7 @@ export default async function ItemDetailPage({
             : null
         }
         initialSteps={steps}
+        initialNotes={notes}
         itemActions={<ItemActions itemId={item.id} status={item.status} />}
       />
 

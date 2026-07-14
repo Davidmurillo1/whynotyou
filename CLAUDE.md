@@ -172,6 +172,7 @@ Cada capability tiene su spec en `openspec/specs/<name>/spec.md`. Para tareas fo
 | `projects` | Proyectos N:M sobre ítems, CRUD, listado/detalle, picker desde el detalle del ítem, chip en biblioteca, entrada de nav. | [spec](openspec/specs/projects/spec.md) |
 | `deadlines` | Fechas límite opcionales en proyectos/ítems/pasos, página `/agenda` con vistas Lista / Calendario / Línea de tiempo, `<DeadlineBadge>` consistente, módulo "Vence pronto" en dashboard. | [spec](openspec/specs/deadlines/spec.md) |
 | `eficiencia-tiempo` | Estimación opcional por entidad, estimación efectiva derivada, índice `T_estimado / T_real` con estados, atribución de tiempo por paso, módulos en detalle ítem/proyecto, sección en `/stats` con rango de fechas. | [spec](openspec/specs/eficiencia-tiempo/spec.md) *(tras archivar el change actual)* |
+| `notas` | Notas discretas (1:N) sobre ítems, módulos y tareas (tabla `item_notes`, `item_id` denormalizado + `step_id` nullable). Ícono `<NotesTrigger>` con contador + panel inline `<NotesPanel>` (crear/editar/borrar) en header del ítem, módulos y tareas; apartado centralizado `<NotesOverview>` agrupado por origen. | [spec](openspec/specs/notas/spec.md) |
 
 Changes en progreso viven bajo `openspec/changes/<name>/`; archivados bajo `openspec/changes/archive/YYYY-MM-DD-<name>/`.
 

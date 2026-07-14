@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { Fragment, useState, useTransition } from 'react'
 import { CalendarPlus, Timer } from 'lucide-react'
 import {
   createStepAction,
@@ -20,6 +20,17 @@ import { DeadlineBadge } from '@/components/deadline-badge'
 import { formatDeadlineLabel, getUrgency } from '@/lib/deadlines/utils'
 import { EstimatedTimeInput } from '@/components/estimated-time-input'
 import { formatEstimate } from '@/lib/efficiency/format'
+import {
+  NotesTrigger,
+  NotesPanel,
+  type Note,
+  type NoteUpdateHandler,
+  type NoteDeleteHandler,
+} from '@/components/notes-control'
+
+/** Firma del creador de notas a nivel editor: incluye el `stepId` destino
+ *  (el `<NotesPanel>` lo cierra sobre su target). */
+type StepNoteCreateHandler = (stepId: string | null, body: string) => Promise<string | null>
 
 export type Step = {
   id: string
@@ -57,6 +68,11 @@ export function StepsEditor({
   weightMode,
   onWeightModeChange,
   today,
+  notes,
+  notesPending,
+  onCreateNote,
+  onUpdateNote,
+  onDeleteNote,
 }: {
   itemId: string
   steps: Step[]
@@ -65,6 +81,12 @@ export function StepsEditor({
   onWeightModeChange: (mode: StepsWeightMode) => void
   /** Día actual (YYYY-MM-DD) en la timezone del perfil, calculado server-side. */
   today: string
+  /** Todas las notas del ítem y sus pasos (cada fila filtra su slice). */
+  notes: Note[]
+  notesPending: boolean
+  onCreateNote: StepNoteCreateHandler
+  onUpdateNote: NoteUpdateHandler
+  onDeleteNote: NoteDeleteHandler
 }) {
   const [pending, startTransition] = useTransition()
   const [error, setError] = useState<string | null>(null)
@@ -327,6 +349,11 @@ export function StepsEditor({
               startTransition={startTransition}
               setError={setError}
               setSteps={setSteps}
+              notes={notes}
+              notesPending={notesPending}
+              onCreateNote={onCreateNote}
+              onUpdateNote={onUpdateNote}
+              onDeleteNote={onDeleteNote}
             />
           ))}
         </ul>
@@ -544,6 +571,11 @@ function ModuleRow({
   startTransition,
   setError,
   setSteps,
+  notes,
+  notesPending,
+  onCreateNote,
+  onUpdateNote,
+  onDeleteNote,
 }: {
   module: Step
   tasks: Step[]
@@ -565,12 +597,21 @@ function ModuleRow({
   startTransition: (cb: () => void) => void
   setError: (e: string | null) => void
   setSteps: React.Dispatch<React.SetStateAction<Step[]>>
+  notes: Note[]
+  notesPending: boolean
+  onCreateNote: StepNoteCreateHandler
+  onUpdateNote: NoteUpdateHandler
+  onDeleteNote: NoteDeleteHandler
 }) {
   const hasChildren = tasks.length > 0
   const moduleProgress = computeStepProgress(module, allSteps)
   const modulePct = Math.round(moduleProgress * 100)
   const effectivelyDone = isStepEffectivelyDone(module, allSteps)
   const [showTaskForm, setShowTaskForm] = useState(false)
+  // Un solo panel de notas abierto a la vez dentro del módulo (el del módulo
+  // o el de una de sus tareas). Guarda el id del target abierto, o null.
+  const [openNotesKey, setOpenNotesKey] = useState<string | null>(null)
+  const moduleNotes = notes.filter((n) => n.step_id === module.id)
 
   return (
     <li className="rounded-xl border border-border bg-surface">
@@ -584,7 +625,7 @@ function ModuleRow({
           aria-label={`Marcar "${module.name}" como completado`}
           title={hasChildren ? 'Estado derivado de las tareas hijas' : undefined}
         />
-        <div className="flex-1 min-w-0 flex items-center gap-2">
+        <div className="flex-1 min-w-0 flex items-center gap-2 flex-wrap">
           <input
             type="text"
             defaultValue={module.name}
@@ -601,6 +642,15 @@ function ModuleRow({
             />
           )}
           <StepEstimateControl step={module} pending={pending} onEstimate={onEstimate} />
+          {/* Notas del módulo: visibles también en módulos completados. */}
+          <NotesTrigger
+            count={moduleNotes.length}
+            open={openNotesKey === module.id}
+            onToggle={() =>
+              setOpenNotesKey((k) => (k === module.id ? null : module.id))
+            }
+            label={`Notas de "${module.name}"`}
+          />
           {weightMode === 'custom' && (
             <div className="flex items-center gap-1 shrink-0">
               <input
@@ -653,6 +703,18 @@ function ModuleRow({
         </div>
       </div>
 
+      {openNotesKey === module.id && (
+        <div className="px-3 pb-2">
+          <NotesPanel
+            notes={moduleNotes}
+            pending={notesPending}
+            onCreate={(body) => onCreateNote(module.id, body)}
+            onUpdate={onUpdateNote}
+            onDelete={onDeleteNote}
+          />
+        </div>
+      )}
+
       {hasChildren && (
         <div className="px-3 pb-1 -mt-1 space-y-1.5">
           <div className="h-1 rounded-full bg-surface-2 overflow-hidden">
@@ -676,65 +738,89 @@ function ModuleRow({
 
       {(hasChildren || showTaskForm) && (
         <ul className="space-y-1.5 pl-9 pr-3 pb-2">
-          {tasks.map((task) => (
-            <li
-              key={task.id}
-              className="flex items-center gap-2 rounded-lg border border-border/60 bg-surface-2/40 px-2.5 py-1.5"
-            >
-              <input
-                type="checkbox"
-                checked={task.is_done}
-                onChange={() => onToggle(task)}
-                disabled={pending}
-                className="w-3.5 h-3.5 accent-accent shrink-0"
-              />
-              <input
-                type="text"
-                defaultValue={task.name}
-                maxLength={120}
-                onBlur={(e) => onRename(task, e.target.value)}
-                className={`${inputCls} flex-1 min-w-0 py-1 text-xs ${task.is_done ? 'line-through text-muted' : ''}`}
-              />
-              {!task.is_done && (
-                <StepDeadlineControl
-                  step={task}
-                  today={today}
-                  pending={pending}
-                  onDeadline={onDeadline}
-                />
-              )}
-              <StepEstimateControl
-                step={task}
-                pending={pending}
-                compact
-                onEstimate={onEstimate}
-              />
-              {module.progress_mode === 'weighted' && (
-                <div className="flex items-center gap-0.5 shrink-0">
+          {tasks.map((task) => {
+            const taskNotes = notes.filter((n) => n.step_id === task.id)
+            return (
+              <Fragment key={task.id}>
+                <li className="flex items-center gap-2 flex-wrap rounded-lg border border-border/60 bg-surface-2/40 px-2.5 py-1.5">
                   <input
-                    type="number"
-                    min={0.01}
-                    max={100}
-                    step="any"
-                    defaultValue={task.weight_pct}
-                    onBlur={(e) => onWeight(task, Number(e.target.value))}
-                    className={`${inputCls} w-20 text-right text-xs py-1 tabular`}
-                    aria-label="Peso de la tarea"
+                    type="checkbox"
+                    checked={task.is_done}
+                    onChange={() => onToggle(task)}
+                    disabled={pending}
+                    className="w-3.5 h-3.5 accent-accent shrink-0"
                   />
-                  <span className="text-[11px] text-muted">%</span>
-                </div>
-              )}
-              <button
-                type="button"
-                onClick={() => onDelete(task)}
-                disabled={pending}
-                aria-label="Eliminar tarea"
-                className="text-muted hover:text-danger px-1 text-sm"
-              >
-                ×
-              </button>
-            </li>
-          ))}
+                  <input
+                    type="text"
+                    defaultValue={task.name}
+                    maxLength={120}
+                    onBlur={(e) => onRename(task, e.target.value)}
+                    className={`${inputCls} flex-1 min-w-0 py-1 text-xs ${task.is_done ? 'line-through text-muted' : ''}`}
+                  />
+                  {!task.is_done && (
+                    <StepDeadlineControl
+                      step={task}
+                      today={today}
+                      pending={pending}
+                      onDeadline={onDeadline}
+                    />
+                  )}
+                  <StepEstimateControl
+                    step={task}
+                    pending={pending}
+                    compact
+                    onEstimate={onEstimate}
+                  />
+                  {/* Notas de la tarea: visibles también en tareas completadas. */}
+                  <NotesTrigger
+                    count={taskNotes.length}
+                    open={openNotesKey === task.id}
+                    onToggle={() =>
+                      setOpenNotesKey((k) => (k === task.id ? null : task.id))
+                    }
+                    compact
+                    label={`Notas de "${task.name}"`}
+                  />
+                  {module.progress_mode === 'weighted' && (
+                    <div className="flex items-center gap-0.5 shrink-0">
+                      <input
+                        type="number"
+                        min={0.01}
+                        max={100}
+                        step="any"
+                        defaultValue={task.weight_pct}
+                        onBlur={(e) => onWeight(task, Number(e.target.value))}
+                        className={`${inputCls} w-20 text-right text-xs py-1 tabular`}
+                        aria-label="Peso de la tarea"
+                      />
+                      <span className="text-[11px] text-muted">%</span>
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => onDelete(task)}
+                    disabled={pending}
+                    aria-label="Eliminar tarea"
+                    className="text-muted hover:text-danger px-1 text-sm"
+                  >
+                    ×
+                  </button>
+                </li>
+                {openNotesKey === task.id && (
+                  <li>
+                    <NotesPanel
+                      notes={taskNotes}
+                      pending={notesPending}
+                      onCreate={(body) => onCreateNote(task.id, body)}
+                      onUpdate={onUpdateNote}
+                      onDelete={onDeleteNote}
+                      compact
+                    />
+                  </li>
+                )}
+              </Fragment>
+            )
+          })}
           {showTaskForm && (
             <NewTaskForm
               itemId={itemId}
